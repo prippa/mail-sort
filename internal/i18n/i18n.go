@@ -34,6 +34,8 @@ var catalog = map[Lang]map[string]string{
 		"undo.done":              "Undo finished.",
 		"undo.nothing":           "There is no applied run to undo.",
 		"undo.left_copy":         "Left in place. Removing a copy would delete mail.",
+		"watch.open_plan":        "An open plan is still waiting. Apply it or undo it before watching.",
+		"watch.stopped":          "Stopped.",
 	},
 	RU: {
 		"app.name":               "MailSorter",
@@ -55,6 +57,8 @@ var catalog = map[Lang]map[string]string{
 		"undo.done":              "Отмена завершена.",
 		"undo.nothing":           "Нет применённого запуска, который можно отменить.",
 		"undo.left_copy":         "Оставлено на месте. Удаление копии удалило бы письмо.",
+		"watch.open_plan":        "План ещё открыт. Примените его или отмените, прежде чем наблюдать за почтой.",
+		"watch.stopped":          "Остановлено.",
 	},
 }
 

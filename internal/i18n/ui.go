@@ -118,7 +118,7 @@ var uiEN = map[string]string{
 	"run.profile":    "Account",
 
 	"automation.title": "Automation",
-	"automation.body":  "Watch is not in this version. A later version can wait for new mail with IMAP IDLE, renew that wait before 29 minutes, and poll every 5 minutes when IDLE is unavailable. Nothing is watching the mailbox now.",
+	"automation.body":  "After a dry run is confirmed and applied, mailsorter watch --profile NAME files mail that arrives later. It waits with IMAP IDLE and renews that wait before 29 minutes. Without IDLE it checks every 5 minutes. Ctrl+C stops it. A systemd user service or a Windows scheduled task can keep it running. An unsigned Windows program may show SmartScreen. Stop watch before starting another dry run.",
 
 	"activity.title": "Activity",
 	"activity.empty": "No runs yet.",
@@ -277,7 +277,7 @@ var uiRU = map[string]string{
 	"run.profile":    "Учётная запись",
 
 	"automation.title": "Автоматизация",
-	"automation.body":  "Наблюдение в этой версии недоступно. Позже программа сможет ждать новую почту через IMAP IDLE, обновлять ожидание до 29 минут и опрашивать ящик каждые 5 минут, если IDLE нет. Сейчас ящик никто не сторожит.",
+	"automation.body":  "После подтверждённого и применённого пробного запуска команда mailsorter watch --profile ИМЯ раскладывает почту, которая придёт позже. Она ждёт через IMAP IDLE и обновляет ожидание до 29 минут. Без IDLE проверка идёт каждые 5 минут. Ctrl+C останавливает её. Служба systemd пользователя или задание Windows может держать её запущенной. Неподписанная программа Windows может показать SmartScreen. Остановите наблюдение перед новым пробным запуском.",
 
 	"activity.title": "Журнал",
 	"activity.empty": "Запусков пока нет.",

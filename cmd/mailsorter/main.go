@@ -6,13 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/prippa/mail-sort/internal/buildinfo"
 	"github.com/prippa/mail-sort/internal/config"
-	"github.com/prippa/mail-sort/internal/logging"
 )
 
 const usageText = `MailSorter files mail into folders.
@@ -25,7 +22,7 @@ Global flags come before the command.
 Commands:
   ui          open the local web UI (default)
   run         dry-run, confirm, and file mail
-  watch       watch a mailbox and file new mail (phase 6)
+  watch       watch a mailbox and file new mail
   undo        reverse a filed run
   test-conn   connect and show IMAP capabilities and folders
   dev-clean   print cleaned messages from one folder
@@ -42,6 +39,7 @@ Commands:
   run --profile NAME --confirm
   run --profile NAME --override UID=category
   run --profile NAME --apply [--copy-only]
+  watch --profile NAME [--folder INBOX] [--poll 5m]
   undo --profile NAME [--run ID] [--uid UID]
 
 The mailbox password is read from the environment variable named by password_env.
@@ -128,45 +126,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return runUI(cfg, path, stdout, stderr)
 	case "watch":
-		if _, _, err := loadConfig(*configPath); err != nil {
+		cfg, path, err := loadConfig(*configPath)
+		if err != nil {
 			return writeError(stderr, err)
 		}
-		return notImplemented(cmd, stderr)
+		return runWatch(cfg, path, fs.Args()[1:], stdout, stderr)
 	default:
 		if err := writeString(stderr, "mailsorter: unknown command "+quote(cmd)+"\n"+usageText); err != nil {
 			return 1
 		}
 		return 2
 	}
-}
-
-func notImplemented(cmd string, stderr io.Writer) int {
-	phase, ok := map[string]string{
-		"watch": "6",
-	}[cmd]
-	if !ok {
-		phase = "?"
-	}
-	stateDir, err := config.StateDir()
-	if err != nil {
-		return writeError(stderr, err)
-	}
-	if err := logging.EnsureDir(stateDir); err != nil {
-		return writeError(stderr, err)
-	}
-	logger, closer, err := logging.Open(filepath.Join(stateDir, "mailsorter.log"), logging.Options{})
-	if err != nil {
-		return writeError(stderr, err)
-	}
-	logger.Info("command not implemented", slog.String("command", cmd), slog.String("phase", phase))
-	if err := closer.Close(); err != nil {
-		return writeError(stderr, err)
-	}
-	message := fmt.Sprintf("mailsorter: %s is not implemented yet (phase %s)\n", cmd, phase)
-	if err := writeString(stderr, message); err != nil {
-		return 1
-	}
-	return 2
 }
 
 func loadConfig(explicit string) (config.Config, string, error) {

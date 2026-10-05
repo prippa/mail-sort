@@ -120,6 +120,10 @@ func (s *Session) UIDValidity(ctx context.Context, mailbox string) (uint32, erro
 	return validity, err
 }
 
+// ErrProtected means the mailbox is Trash, Junk, Drafts, or Sent and the
+// caller did not select it explicitly.
+var ErrProtected = errors.New("imap: refusing to open that mailbox")
+
 // FindUID searches mailbox for a Message-ID. The search is a substring match.
 // VERIFY: servers differ on whether the angle brackets are part of the match.
 func (s *Session) FindUID(ctx context.Context, mailbox, messageID string) (uint32, bool, error) {
@@ -195,7 +199,7 @@ func (s *Session) rejectProtected(ctx context.Context, mailbox string, allow boo
 		return nil
 	}
 	if protectedMailboxName(mailbox) {
-		return fmt.Errorf("imap: refusing to open %q", mailbox)
+		return fmt.Errorf("imap: refusing to open %q: %w", mailbox, ErrProtected)
 	}
 	folders, err := s.ListFolders(ctx)
 	if err != nil {
@@ -207,7 +211,7 @@ func (s *Session) rejectProtected(ctx context.Context, mailbox string, allow boo
 		}
 		for _, use := range folder.SpecialUse {
 			if protectedSpecialUse(use) {
-				return fmt.Errorf("imap: refusing to open %q (%s)", mailbox, use)
+				return fmt.Errorf("imap: refusing to open %q (%s): %w", mailbox, use, ErrProtected)
 			}
 		}
 	}

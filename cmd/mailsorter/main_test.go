@@ -40,14 +40,49 @@ func TestHelp(t *testing.T) {
 	}
 }
 
-func TestNotImplemented(t *testing.T) {
-	isolate(t)
-	_, stderr, code := runCmd(t, "watch")
-	if code != 2 {
-		t.Fatalf("code=%d stderr=%s", code, stderr)
+func TestWatchDoesNotDialBeforeConfirmation(t *testing.T) {
+	dir := isolate(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "watch is not implemented yet (phase 6)") {
-		t.Fatalf("stderr=%q", stderr)
+	t.Cleanup(func() { _ = ln.Close() })
+	connected := make(chan struct{}, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
+			connected <- struct{}{}
+		}
+	}()
+	host, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secret = "watch-secret-do-not-print"
+	body := "language: en\nprofiles:\n  - name: Work\n    provider: custom\n    host: " + host + "\n    port: " + port + "\n    security: implicit_tls\n    auth: password\n    username: ada@example.com\n    email: ada@example.com\n    password_env: MAIL_SORTER_PASSWORD_WORK\n"
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAIL_SORTER_PASSWORD_WORK", secret)
+	_, stderr, code := runCmd(t, "--config", path, "watch", "--profile", "Work")
+	if code == 0 || !strings.Contains(stderr, "not confirmed") || strings.Contains(stderr, secret) || strings.Contains(stderr, "phase 6") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	select {
+	case <-connected:
+		t.Fatal("watch opened a connection")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestWatchDelayCaps(t *testing.T) {
+	if d := watchDelay(0); d < time.Second || d >= 2*time.Second {
+		t.Fatalf("first delay %s", d)
+	}
+	if d := watchDelay(30); d < 5*time.Minute || d >= 5*time.Minute+time.Second {
+		t.Fatalf("capped delay %s", d)
 	}
 }
 

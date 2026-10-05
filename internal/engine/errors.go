@@ -11,6 +11,8 @@ var (
 	ErrNothingToApply = errors.New("engine: there is no dry run to apply")
 	// ErrNothingToUndo means there is no filed run.
 	ErrNothingToUndo = errors.New("engine: there is no applied run to undo")
+	// ErrOpenPlan means a dry run is still open. Watch will not replace it.
+	ErrOpenPlan = errors.New("engine: an open plan must be applied or undone before watching")
 	// ErrUnknownCategory means the override name is not in the category list.
 	ErrUnknownCategory = errors.New("engine: unknown category")
 	// ErrUnknownUID means that UID is not in the open dry run.

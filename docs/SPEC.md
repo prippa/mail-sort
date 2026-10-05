@@ -72,7 +72,7 @@ Global flags come before the command. `--config` overrides the default path.
 | `categories export` | 2 | writes the starter category list as YAML |
 | `run` | 3 | dry-run by default; `--confirm` stores the SQLite confirmation; `--apply` files that plan |
 | `undo` | 3 | moves a filed run back, or reports a copy left in place |
-| `watch` | 6 | not implemented |
+| `watch` | 6 | after confirmation, files mail that arrives later; IDLE renewed before 29 minutes; poll every 5 minutes without IDLE |
 | `version` | 0 | prints the ldflags version, or `dev` |
 | `help` | 0 | usage |
 
@@ -277,7 +277,7 @@ MOVE is sent only when the server advertises MOVE or IMAP4rev2. Otherwise UIDPLU
 
 Undo reverses a run or selected rows from the stored UIDs and reports what failed.
 
-Watch: IMAP IDLE, re-issued before 29 minutes, polling fallback default 5 minutes, reconnect, token refresh, SIGINT/SIGTERM. README will include a systemd user unit and a Windows Task Scheduler example.
+Watch: IMAP IDLE, re-issued before 29 minutes, polling fallback default 5 minutes, reconnect, token refresh, SIGINT/SIGTERM. The pinned IMAP client restarts IDLE every 28 minutes. `watch` refuses to dial until the profile is confirmed, and it leaves an open dry run in place. A partial apply continues, at most the move cap, then waits one poll interval. README includes a systemd user unit and a Windows Task Scheduler example. An unsigned Windows build can show SmartScreen.
 
 Logging is JSON lines. Per-run summary: counts per category, API calls, tokens, latency, and a cost estimate when the user entered prices. CSV export.
 
@@ -323,5 +323,6 @@ These stay `// VERIFY` until the cited source is read in the phase that implemen
 - A live ISPDB domain document. The index `https://autoconfig.thunderbird.net/v1.1/` exists; `gmail.com` returned HTTP 500. Thunderbird's autoconfig page says it does not use DNS SRV; this program still tries RFC 6186 last.
 - Live-server `UID MOVE` and `UID EXPUNGE`. The in-memory server covers MOVE, and COPY plus STORE `\Deleted` plus UID EXPUNGE of one UID, including a second `\Deleted` message that must stay. A dynamic COPYUID has no numeric UID here; the fallback is a Message-ID search. `Authenticate(sasl.Client) error` is the pinned signature. The XOAUTH2 initial response is tested against Microsoft's documented example. Live Gmail and Microsoft sign-in were not used.
 - Whether a Google Desktop client accepts an unregistered random `http://127.0.0.1` port, and whether Entra treats a registered `http://localhost` as matching `http://localhost:<port>`. If the provider reports a redirect mismatch, add the printed address and sign in again.
+- Live IMAP IDLE against Gmail or Microsoft. The in-memory server covers an IDLE wake and the poll fallback. The pinned `go-imap` client restarts IDLE every 28 minutes.
 - A live Jev, OpenAI, or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
 - Anthropic models that reject `tool_choice` type `tool` (the primer names Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1). The client retries a 400 without the force, then once without `strict`. That fallback was not verified against a live model.

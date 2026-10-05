@@ -38,6 +38,7 @@ type Session struct {
 	release  func()
 	password string
 	hint     string
+	updates  chan uint32
 	once     sync.Once
 }
 
@@ -105,7 +106,8 @@ func (c *Client) dial(ctx context.Context, account Account, secret string) (*Ses
 		return nil, err
 	}
 	release := func() { <-c.gate }
-	raw, err := dialRetry(ctx, account.Endpoint)
+	updates := make(chan uint32, 1)
+	raw, err := dialRetry(ctx, account.Endpoint, updates)
 	if err != nil {
 		release()
 		return nil, scrub(fmt.Errorf("imap: dial %s: %w", account.Endpoint.addr(), err), secret)
@@ -115,6 +117,7 @@ func (c *Client) dial(ctx context.Context, account Account, secret string) (*Ses
 		release:  release,
 		password: secret,
 		hint:     account.AuthFailureHint,
+		updates:  updates,
 	}, nil
 }
 
@@ -221,14 +224,14 @@ func (s *Session) do(ctx context.Context, fn func() error) error {
 	}
 }
 
-func dialRetry(ctx context.Context, ep Endpoint) (*imapclient.Client, error) {
+func dialRetry(ctx context.Context, ep Endpoint, updates chan uint32) (*imapclient.Client, error) {
 	var err error
 	for attempt := 0; attempt < dialAttempts; attempt++ {
 		if err = ctx.Err(); err != nil {
 			return nil, err
 		}
 		var client *imapclient.Client
-		client, err = dial(ctx, ep)
+		client, err = dial(ctx, ep, updates)
 		if err == nil {
 			return client, nil
 		}
@@ -242,10 +245,14 @@ func dialRetry(ctx context.Context, ep Endpoint) (*imapclient.Client, error) {
 	return nil, err
 }
 
-func dial(ctx context.Context, ep Endpoint) (*imapclient.Client, error) {
+func dial(ctx context.Context, ep Endpoint, updates chan uint32) (*imapclient.Client, error) {
 	cfg, err := tlsConfig(ep)
 	if err != nil {
 		return nil, err
+	}
+	opts := &imapclient.Options{
+		TLSConfig:             cfg,
+		UnilateralDataHandler: &imapclient.UnilateralDataHandler{Mailbox: countHandler(updates)},
 	}
 	switch ep.Security {
 	case ImplicitTLS:
@@ -256,13 +263,13 @@ func dial(ctx context.Context, ep Endpoint) (*imapclient.Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		return imapclient.New(conn, nil), nil
+		return imapclient.New(conn, opts), nil
 	case StartTLS:
 		conn, err := (&net.Dialer{Timeout: commandTimeout}).DialContext(ctx, "tcp", ep.addr())
 		if err != nil {
 			return nil, err
 		}
-		client, err := startTLS(ctx, conn, cfg)
+		client, err := startTLS(ctx, conn, opts)
 		if err != nil {
 			_ = conn.Close()
 			return nil, err
@@ -273,14 +280,37 @@ func dial(ctx context.Context, ep Endpoint) (*imapclient.Client, error) {
 	}
 }
 
-func startTLS(ctx context.Context, conn net.Conn, cfg *tls.Config) (*imapclient.Client, error) {
+func countHandler(updates chan uint32) func(*imapclient.UnilateralDataMailbox) {
+	return func(data *imapclient.UnilateralDataMailbox) {
+		if data == nil || data.NumMessages == nil {
+			return
+		}
+		pushCount(updates, *data.NumMessages)
+	}
+}
+
+func pushCount(updates chan uint32, n uint32) {
+	if updates == nil {
+		return
+	}
+	select {
+	case <-updates:
+	default:
+	}
+	select {
+	case updates <- n:
+	default:
+	}
+}
+
+func startTLS(ctx context.Context, conn net.Conn, opts *imapclient.Options) (*imapclient.Client, error) {
 	type result struct {
 		client *imapclient.Client
 		err    error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		client, err := imapclient.NewStartTLS(conn, &imapclient.Options{TLSConfig: cfg})
+		client, err := imapclient.NewStartTLS(conn, opts)
 		ch <- result{client, err}
 	}()
 	select {

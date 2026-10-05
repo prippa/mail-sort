@@ -616,6 +616,8 @@ func writeEngineError(stderr io.Writer, lang i18n.Lang, err error) int {
 		return writeNote(stderr, i18n.T(lang, "run.nothing_to_apply"))
 	case errors.Is(err, engine.ErrNothingToUndo):
 		return writeNote(stderr, i18n.T(lang, "undo.nothing"))
+	case errors.Is(err, engine.ErrOpenPlan):
+		return writeNote(stderr, i18n.T(lang, "watch.open_plan"))
 	case errors.Is(err, store.ErrApplyInProgress):
 		return writeError(stderr, err)
 	default:
