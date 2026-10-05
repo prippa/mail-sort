@@ -63,10 +63,11 @@ IMAP types do not leave `internal/mail`.
 
 Global flags come before the command. `--config` overrides the default path.
 
-| Command | Phase | Behavior in this scaffold |
+| Command | Phase | Behavior |
 | --- | --- | --- |
 | `ui` (default) | 4 | not implemented |
-| `test-conn` | 1 | not implemented |
+| `test-conn` | 1 | connects with a password, prints capabilities and folders |
+| `dev-clean` | 1 | prints cleaned messages; does not move mail |
 | `classify` | 2 | not implemented |
 | `run` | 3 | not implemented |
 | `undo` | 3 | not implemented |
@@ -100,7 +101,15 @@ profiles:
     username: ada@example.com
     email: ada@example.com
     password_env: MAIL_SORTER_PASSWORD_WORK
+    auth: password # password, oauth_google, oauth_microsoft
+    # host_id: personal   # zoho and workmail, when host is empty
+    # ca_file: /path/to/ca.pem
+    # cert_sha256: 64 hex characters
+    discover: false # custom provider with an empty host
+    max_chars: 1500
 ```
+
+`auth` defaults to a password when `password_env` is set and the preset allows it. Gmail without `password_env` stays on OAuth, which is not implemented until phase 5. Microsoft accepts only `oauth_microsoft`. `discover: true` is used when `provider` is `custom` and `host` is empty. Lookup order is the ISP autoconfig URL, `/.well-known/autoconfig/mail/config-v1.1.xml`, then `https://autoconfig.thunderbird.net/v1.1/{domain}`, then RFC 6186 `_imaps._tcp`. The local part of the address is not sent. HTTP and host guessing are not used.
 
 `password_env` is a variable name. These environment variables are the headless overrides:
 
@@ -272,10 +281,10 @@ Stop after each phase until the user says `next`.
 
 These stay `// VERIFY` until the cited source is read in the phase that implements them:
 
-- Mail.ru host, port, and app-password rule on `help.mail.ru`.
-- Proton Mail Bridge host, port, STARTTLS, and certificate instructions on a Proton support page.
+- Mail.ru host, port, and app-password rule on `help.mail.ru`. The preset is not shipped.
+- Proton Mail Bridge host, port, STARTTLS, and certificate instructions on a Proton support page. The preset is not shipped.
 - AWS WorkMail regions beyond `us-east-1`, `us-west-2`, and `eu-west-1` on the AWS endpoints page.
-- Zoho personal IMAP hosts outside the documented samples.
-- Mozilla ISPDB URL and the `autoconfig` / SRV autodiscovery sequence.
-- `imapclient` `Authenticate`, `UID MOVE`, and `UID EXPUNGE` signatures in the pinned go-imap source.
+- Zoho personal IMAP hosts outside `imap.zoho.com` and `imappro.zoho.com`. The current IMAP guide says to paste the datacenter host from the account.
+- A live ISPDB domain document. The index `https://autoconfig.thunderbird.net/v1.1/` exists; `gmail.com` returned HTTP 500. Thunderbird's autoconfig page says it does not use DNS SRV; this program still tries RFC 6186 last.
+- `imapclient` `UID MOVE` and `UID EXPUNGE` behavior. `Authenticate(sasl.Client) error` is the pinned signature; XOAUTH2 is phase 5.
 - OpenAI-compatible and Anthropic request bodies, checked when those adapters are written.

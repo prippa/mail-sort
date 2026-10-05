@@ -144,6 +144,36 @@ func TestLoadTooLarge(t *testing.T) {
 	}
 }
 
+func TestLoadPhase1Fields(t *testing.T) {
+	t.Parallel()
+	const fingerprint = "ab"
+	path := writeConfig(t, `
+profiles:
+  - name: Work
+    provider: zoho
+    host_id: personal
+    auth: password
+    discover: false
+    max_chars: 800
+    cert_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    ca_file: /tmp/ca.pem
+    password_env: MAIL_SORTER_PASSWORD_WORK
+`)
+	cfg, err := Load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Profiles[0]
+	if got.HostID != "personal" || got.Auth != "password" || got.Discover || got.MaxChars != 800 || got.CAFile != "/tmp/ca.pem" {
+		t.Fatalf("profile = %+v", got)
+	}
+	bad := writeConfig(t, "profiles:\n  - name: Work\n    cert_sha256: "+fingerprint+"\n")
+	_, err = Load(context.Background(), bad)
+	if err == nil || strings.Contains(err.Error(), fingerprint) || !strings.Contains(err.Error(), "cert_sha256") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestLoadCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

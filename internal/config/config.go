@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -29,17 +30,23 @@ type Config struct {
 	Profiles []Profile `yaml:"profiles"`
 }
 
-// Profile is one mailbox. Empty Security and Port mean "use the provider preset"
-// once presets exist; phase 0 only checks the shape.
+// Profile is one mailbox. Empty host, port, and security are filled from the
+// provider preset. max_chars 0 means the default body cap (1500).
 type Profile struct {
 	Name        string `yaml:"name"`
 	Provider    string `yaml:"provider"`
 	Host        string `yaml:"host"`
+	HostID      string `yaml:"host_id"`
 	Port        int    `yaml:"port"`
 	Security    string `yaml:"security"`
 	Username    string `yaml:"username"`
 	PasswordEnv string `yaml:"password_env"`
 	Email       string `yaml:"email"`
+	Auth        string `yaml:"auth"`
+	CAFile      string `yaml:"ca_file"`
+	CertSHA256  string `yaml:"cert_sha256"`
+	Discover    bool   `yaml:"discover"`
+	MaxChars    int    `yaml:"max_chars"`
 }
 
 var configFields = map[string]struct{}{
@@ -51,11 +58,17 @@ var profileFields = map[string]struct{}{
 	"name":         {},
 	"provider":     {},
 	"host":         {},
+	"host_id":      {},
 	"port":         {},
 	"security":     {},
 	"username":     {},
 	"password_env": {},
 	"email":        {},
+	"auth":         {},
+	"ca_file":      {},
+	"cert_sha256":  {},
+	"discover":     {},
+	"max_chars":    {},
 }
 
 // Load reads path and rejects secret fields, aliases, and unknown keys.
@@ -168,8 +181,16 @@ func validateProfiles(val *yaml.Node) error {
 				return checkPort(field)
 			case "security":
 				return checkChoice(keyNode, field, "implicit_tls", "starttls")
+			case "auth":
+				return checkChoice(keyNode, field, "password", "oauth_google", "oauth_microsoft")
 			case "password_env":
 				return checkEnvName(field)
+			case "cert_sha256":
+				return checkFingerprint(field)
+			case "discover":
+				return checkBool(keyNode, field)
+			case "max_chars":
+				return checkMaxChars(field)
 			default:
 				return checkScalar(keyNode, field)
 			}
@@ -257,6 +278,44 @@ func checkPort(val *yaml.Node) error {
 	port, err := strconv.Atoi(val.Value)
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("config: field \"port\" at line %d must be between 1 and 65535", val.Line)
+	}
+	return nil
+}
+
+func checkFingerprint(val *yaml.Node) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field \"cert_sha256\" at line %d must be a string", val.Line)
+	}
+	sum, err := hex.DecodeString(val.Value)
+	if err != nil || len(sum) != 32 {
+		return fmt.Errorf("config: field \"cert_sha256\" at line %d must be 64 hex characters", val.Line)
+	}
+	return nil
+}
+
+func checkBool(keyNode, val *yaml.Node) error {
+	if isNull(val) {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode || (val.Value != "true" && val.Value != "false") {
+		return fmt.Errorf("config: field %q at line %d must be true or false", keyNode.Value, keyNode.Line)
+	}
+	return nil
+}
+
+func checkMaxChars(val *yaml.Node) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field \"max_chars\" at line %d must be a number", val.Line)
+	}
+	n, err := strconv.Atoi(val.Value)
+	if err != nil || n < 0 || n > 100000 {
+		return fmt.Errorf("config: field \"max_chars\" at line %d must be between 0 and 100000", val.Line)
 	}
 	return nil
 }

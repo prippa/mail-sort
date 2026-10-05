@@ -15,10 +15,10 @@ import (
 	"github.com/prippa/mail-sort/internal/logging"
 )
 
-const usageText = `MailSorter files mail into folders. This build is the phase 0 scaffold.
+const usageText = `MailSorter files mail into folders.
 
 Usage:
-  mailsorter [command] [--config path]
+  mailsorter [--config path] <command> [flags]
 
 Global flags come before the command.
 
@@ -27,13 +27,17 @@ Commands:
   run         classify and file mail (phase 3)
   watch       watch a mailbox and file new mail (phase 6)
   undo        reverse a run (phase 3)
-  test-conn   connect and show IMAP capabilities (phase 1)
+  test-conn   connect and show IMAP capabilities and folders
+  dev-clean   print cleaned messages from one folder
   classify    classify one message from stdin (phase 2)
   version     print the build version
   help        show this help
 
-version is the only command this build runs. Passwords, API keys, and tokens
-are rejected if a config file contains them.
+  test-conn --profile NAME
+  dev-clean --profile NAME [--folder INBOX] [--limit 5] [--max-chars N]
+
+The password is read from the environment variable named by password_env.
+OAuth is not implemented yet.
 `
 
 func main() {
@@ -68,7 +72,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "version":
 		if *configPath != "" {
-			if err := loadConfig(*configPath); err != nil {
+			if _, err := loadConfig(*configPath); err != nil {
 				return writeError(stderr, err)
 			}
 		}
@@ -76,8 +80,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
-	case "ui", "run", "watch", "undo", "test-conn", "classify":
-		if err := loadConfig(*configPath); err != nil {
+	case "test-conn":
+		cfg, err := loadConfig(*configPath)
+		if err != nil {
+			return writeError(stderr, err)
+		}
+		return runTestConn(cfg, fs.Args()[1:], stdout, stderr)
+	case "dev-clean":
+		cfg, err := loadConfig(*configPath)
+		if err != nil {
+			return writeError(stderr, err)
+		}
+		return runDevClean(cfg, fs.Args()[1:], stdout, stderr)
+	case "ui", "run", "watch", "undo", "classify":
+		if _, err := loadConfig(*configPath); err != nil {
 			return writeError(stderr, err)
 		}
 		return notImplemented(cmd, stderr)
@@ -91,12 +107,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func notImplemented(cmd string, stderr io.Writer) int {
 	phase, ok := map[string]string{
-		"test-conn": "1",
-		"classify":  "2",
-		"run":       "3",
-		"undo":      "3",
-		"ui":        "4",
-		"watch":     "6",
+		"classify": "2",
+		"run":      "3",
+		"undo":     "3",
+		"ui":       "4",
+		"watch":    "6",
 	}[cmd]
 	if !ok {
 		phase = "?"
@@ -123,24 +138,23 @@ func notImplemented(cmd string, stderr io.Writer) int {
 	return 2
 }
 
-func loadConfig(explicit string) error {
+func loadConfig(explicit string) (config.Config, error) {
 	path := explicit
 	if path == "" {
 		var err error
 		path, err = config.Path()
 		if err != nil {
-			return err
+			return config.Config{}, err
 		}
 		_, err = os.Stat(path)
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return config.Config{}, nil
 		}
 		if err != nil {
-			return fmt.Errorf("config: open %s: %w", path, err)
+			return config.Config{}, fmt.Errorf("config: open %s: %w", path, err)
 		}
 	}
-	_, err := config.Load(context.Background(), path)
-	return err
+	return config.Load(context.Background(), path)
 }
 
 func writeError(stderr io.Writer, err error) int {

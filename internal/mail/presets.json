@@ -1,0 +1,130 @@
+[
+  {
+    "id": "gmail",
+    "name": "Gmail",
+    "source": "https://developers.google.com/workspace/gmail/imap/imap-smtp",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "imap.gmail.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["oauth_google", "password"],
+    "username_hint": "Use the full Gmail address.",
+    "note": "OAuth is preferred. An app password needs 2-Step Verification and is discouraged.",
+    "auth_failure_hint": "Gmail app passwords need 2-Step Verification. A Workspace or admin policy may require OAuth."
+  },
+  {
+    "id": "microsoft",
+    "name": "Microsoft 365 / Outlook.com",
+    "source": "https://support.office.com/en-gb/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "outlook.office365.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["oauth_microsoft"],
+    "username_hint": "Use the full mailbox address.",
+    "note": "OAuth2 only. IMAP is off until it is enabled for the mailbox.",
+    "auth_failure_hint": "Microsoft 365 and Outlook.com require OAuth2. IMAP may be disabled until it is enabled, and an admin may need to consent."
+  },
+  {
+    "id": "icloud",
+    "name": "iCloud",
+    "source": "https://support.apple.com/en-us/102525",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "imap.mail.me.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["password"],
+    "username_hint": "Apple usually expects the local part of the address. If that fails, try the full address.",
+    "note": "Use an app-specific password.",
+    "auth_failure_hint": "iCloud needs an app-specific password. The username is usually the local part of the address."
+  },
+  {
+    "id": "yahoo",
+    "name": "Yahoo",
+    "source": "https://help.yahoo.com/kb/SLN4075.html",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "imap.mail.yahoo.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["password"],
+    "username_hint": "Use the full email address.",
+    "note": "Yahoo's IMAP page says to generate an app password.",
+    "auth_failure_hint": "Yahoo IMAP needs an app password and the full email address."
+  },
+  {
+    "id": "fastmail",
+    "name": "Fastmail",
+    "source": "https://www.fastmail.help/hc/en-us/articles/1500000278342-Server-names-and-ports",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "imap.fastmail.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["password"],
+    "username_hint": "Use the full email address.",
+    "note": "An app password is required. Fastmail does not support STARTTLS on this host.",
+    "auth_failure_hint": "Fastmail requires an app password and the full email address."
+  },
+  {
+    "id": "zoho",
+    "name": "Zoho",
+    "source": "https://www.zoho.com/mail/help/imap-access.html",
+    "verified": true,
+    "hosts": [
+      {"id": "personal", "host": "imap.zoho.com", "port": 993, "security": "implicit_tls", "note": "Personal and free organization mailboxes."},
+      {"id": "org", "host": "imappro.zoho.com", "port": 993, "security": "implicit_tls", "note": "Paid organization mailboxes."}
+    ],
+    "auth": ["password"],
+    "username_hint": "Use the full email address.",
+    "note": "Enable IMAP first. Use an app password if 2FA or SAML is on. If Zoho shows a different host for your datacenter, paste that host.",
+    "auth_failure_hint": "Enable IMAP in Zoho settings. Use an app password when 2FA or SAML is on, and paste the host from Zoho if it differs."
+  },
+  {
+    "id": "gmx",
+    "name": "GMX",
+    "source": "https://support.gmx.com/pop-imap/imap/server.html",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "imap.gmx.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["password"],
+    "username_hint": "Use the full email address.",
+    "note": "GMX documents TLS 1.2 or 1.3. Port 143 with STARTTLS is a documented fallback; set it on the profile if 993 is blocked.",
+    "auth_failure_hint": "Enable IMAP in the GMX account, then use the mailbox password."
+  },
+  {
+    "id": "yandex",
+    "name": "Yandex",
+    "source": "https://yandex.com/support/yandex-360/business/mail/en/mail-clients/microsoft-outlook",
+    "verified": true,
+    "default_host": "default",
+    "hosts": [
+      {"id": "default", "host": "imap.yandex.com", "port": 993, "security": "implicit_tls"},
+      {"id": "ya", "host": "imap.ya.ru", "port": 993, "security": "implicit_tls", "note": "Documented alternate outside Russia."}
+    ],
+    "auth": ["password"],
+    "username_hint": "Use the Yandex username. For @yandex.com that is the local part.",
+    "note": "Enable IMAP and create an app password in the Yandex mail settings.",
+    "auth_failure_hint": "Enable IMAP in Yandex and use an app password. For @yandex.com the username is the local part."
+  },
+  {
+    "id": "workmail",
+    "name": "AWS WorkMail",
+    "source": "https://docs.aws.amazon.com/workmail/latest/userguide/using_IMAP.html",
+    "verified": true,
+    "hosts": [
+      {"id": "us-east-1", "host": "imap.mail.us-east-1.awsapps.com", "port": 993, "security": "implicit_tls"},
+      {"id": "us-west-2", "host": "imap.mail.us-west-2.awsapps.com", "port": 993, "security": "implicit_tls"},
+      {"id": "eu-west-1", "host": "imap.mail.eu-west-1.awsapps.com", "port": 993, "security": "implicit_tls"}
+    ],
+    "auth": ["password"],
+    "username_hint": "Use the full email address.",
+    "note": "Set host_id to the documented region, or paste the host from the WorkMail console.",
+    "auth_failure_hint": "Use the full WorkMail address and the IMAP password from your administrator."
+  }
+]
