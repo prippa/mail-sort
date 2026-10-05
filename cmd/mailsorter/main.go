@@ -29,22 +29,26 @@ Commands:
   undo        reverse a run (phase 3)
   test-conn   connect and show IMAP capabilities and folders
   dev-clean   print cleaned messages from one folder
-  classify    classify one message from stdin (phase 2)
+  classify    classify one message from stdin
+  categories  export the starter category list
   version     print the build version
   help        show this help
 
   test-conn --profile NAME
   dev-clean --profile NAME [--folder INBOX] [--limit 5] [--max-chars N]
+  classify --stdin [--max-chars N]
+  categories export
 
-The password is read from the environment variable named by password_env.
+The mailbox password is read from the environment variable named by password_env.
+Jev reads TYPESAFE_API_KEY. Other classifiers read the variable named by key_env.
 OAuth is not implemented yet.
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mailsorter", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to config.yaml")
@@ -72,7 +76,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "version":
 		if *configPath != "" {
-			if _, err := loadConfig(*configPath); err != nil {
+			if _, _, err := loadConfig(*configPath); err != nil {
 				return writeError(stderr, err)
 			}
 		}
@@ -81,19 +85,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	case "test-conn":
-		cfg, err := loadConfig(*configPath)
+		cfg, _, err := loadConfig(*configPath)
 		if err != nil {
 			return writeError(stderr, err)
 		}
 		return runTestConn(cfg, fs.Args()[1:], stdout, stderr)
 	case "dev-clean":
-		cfg, err := loadConfig(*configPath)
+		cfg, _, err := loadConfig(*configPath)
 		if err != nil {
 			return writeError(stderr, err)
 		}
 		return runDevClean(cfg, fs.Args()[1:], stdout, stderr)
-	case "ui", "run", "watch", "undo", "classify":
-		if _, err := loadConfig(*configPath); err != nil {
+	case "categories":
+		return runCategories(fs.Args()[1:], stdout, stderr)
+	case "classify":
+		cfg, path, err := loadConfig(*configPath)
+		if err != nil {
+			return writeError(stderr, err)
+		}
+		return runClassify(cfg, path, fs.Args()[1:], stdin, stdout, stderr)
+	case "ui", "run", "watch", "undo":
+		if _, _, err := loadConfig(*configPath); err != nil {
 			return writeError(stderr, err)
 		}
 		return notImplemented(cmd, stderr)
@@ -107,11 +119,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func notImplemented(cmd string, stderr io.Writer) int {
 	phase, ok := map[string]string{
-		"classify": "2",
-		"run":      "3",
-		"undo":     "3",
-		"ui":       "4",
-		"watch":    "6",
+		"run":   "3",
+		"undo":  "3",
+		"ui":    "4",
+		"watch": "6",
 	}[cmd]
 	if !ok {
 		phase = "?"
@@ -138,23 +149,36 @@ func notImplemented(cmd string, stderr io.Writer) int {
 	return 2
 }
 
-func loadConfig(explicit string) (config.Config, error) {
-	path := explicit
-	if path == "" {
-		var err error
-		path, err = config.Path()
-		if err != nil {
-			return config.Config{}, err
-		}
-		_, err = os.Stat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			return config.Config{}, nil
-		}
-		if err != nil {
-			return config.Config{}, fmt.Errorf("config: open %s: %w", path, err)
-		}
+func loadConfig(explicit string) (config.Config, string, error) {
+	path, present, err := resolveConfigPath(explicit)
+	if err != nil {
+		return config.Config{}, "", err
 	}
-	return config.Load(context.Background(), path)
+	if !present {
+		return config.Config{}, path, nil
+	}
+	cfg, err := config.Load(context.Background(), path)
+	if err != nil {
+		return config.Config{}, path, err
+	}
+	return cfg, path, nil
+}
+
+func resolveConfigPath(explicit string) (string, bool, error) {
+	if explicit != "" {
+		return explicit, true, nil
+	}
+	path, err := config.Path()
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return path, false, nil
+		}
+		return "", false, fmt.Errorf("config: open %s: %w", path, err)
+	}
+	return path, true, nil
 }
 
 func writeError(stderr io.Writer, err error) int {

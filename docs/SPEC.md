@@ -68,7 +68,8 @@ Global flags come before the command. `--config` overrides the default path.
 | `ui` (default) | 4 | not implemented |
 | `test-conn` | 1 | connects with a password, prints capabilities and folders |
 | `dev-clean` | 1 | prints cleaned messages; does not move mail |
-| `classify` | 2 | not implemented |
+| `classify` | 2 | classifies one message from stdin; does not move mail |
+| `categories export` | 2 | writes the starter category list as YAML |
 | `run` | 3 | not implemented |
 | `undo` | 3 | not implemented |
 | `watch` | 6 | not implemented |
@@ -88,7 +89,7 @@ Exit 0 on success, 1 on a config or log error, 2 on usage or a command this buil
 
 The file is `config.yaml`. A relative `XDG_STATE_HOME` is ignored. Files larger than 1 MiB are rejected.
 
-Phase 0 fields:
+Settings:
 
 ```yaml
 language: auto # auto, en, ru
@@ -107,9 +108,31 @@ profiles:
     # cert_sha256: 64 hex characters
     discover: false # custom provider with an empty host
     max_chars: 1500
+categories_file: categories.yaml # optional; a missing file uses the starter list
+classifiers:
+  - provider: jev # jev, openai_compatible, anthropic
+    # model defaults to jev-1.13.0; jev-latest and jev-preview are aliases
+    base_url: https://api.typesafe.ai
+    # key_env defaults to TYPESAFE_API_KEY for jev
+    min_confidence: 0.8
+    # min_margin: 0.1
+    rps: 2
+    burst: 4
+    # price_input and price_output are dollars per million tokens, optional
+  - provider: openai_compatible
+    model: your-model-id # required; this program does not pick one
+    base_url: https://api.openai.com/v1 # or http://127.0.0.1:11434/v1
+    key_env: OPENAI_API_KEY
+    min_confidence: 0.7
+  - provider: anthropic
+    model: your-model-id
+    base_url: https://api.anthropic.com
+    key_env: ANTHROPIC_API_KEY
 ```
 
 `auth` defaults to a password when `password_env` is set and the preset allows it. Gmail without `password_env` stays on OAuth, which is not implemented until phase 5. Microsoft accepts only `oauth_microsoft`. `discover: true` is used when `provider` is `custom` and `host` is empty. Lookup order is the ISP autoconfig URL, `/.well-known/autoconfig/mail/config-v1.1.xml`, then `https://autoconfig.thunderbird.net/v1.1/{domain}`, then RFC 6186 `_imaps._tcp`. The local part of the address is not sent. HTTP and host guessing are not used.
+
+`classifiers` is the enabled chain, in order. An empty list calls no provider. `key_env` is a variable name. `api_key` is rejected. Jev's base URL is the origin (`POST /v1/systemone`). An OpenAI-compatible base URL includes `/v1` (`POST /chat/completions`). Anthropic's base URL is the origin (`POST /v1/messages`). A missing or rejected key stops the chain. Category rubrics live in `categories.yaml` beside the config, or in `categories_file`.
 
 `password_env` is a variable name. These environment variables are the headless overrides:
 
@@ -214,11 +237,11 @@ The response `answers.folder` is `{type, choice, probabilities, confidence}` plu
 
 Choice confidence is `(p_max - 1/n) / (1 - 1/n)`. The same 0.80 means a different top probability as categories are added. Default minimum confidence 0.80 is a placeholder and the UI says so. Optional `min_margin` (`p_top - p_second`) is off unless set.
 
-401 and 422 are not retried. 422 is logged without the message body. 429 and 529 retry. If there is no key, show onboarding and do not call another provider.
+401 and 422 are not retried. 422 is logged without the message body. 429 and 529 retry, as do transport failures. Other HTTP 5xx responses are not retried, so the next provider can run. The TypeSafe SDK also retries 408 and 500–599; this client follows the statuses named here. If there is no key, show onboarding and do not call another provider. A rejected key stops the chain the same way.
 
 ### Other providers
 
-`openai_compatible`: `base_url`, `api_key`, `model`. Covers OpenAI, OpenRouter, Groq, Ollama (`http://localhost:11434/v1`), LM Studio, and vLLM. Prefer JSON schema, then JSON mode, then tolerant parsing.
+`openai_compatible`: `base_url`, `key_env`, `model`. The key stays in the environment because `api_key` is not allowed in the config file. Covers OpenAI, OpenRouter, Groq, Ollama (`http://localhost:11434/v1`), LM Studio, and vLLM. Prefer JSON schema, then JSON mode, then tolerant parsing.
 
 `anthropic`: Messages API with a forced tool call of the same schema.
 
@@ -228,7 +251,9 @@ The message is untrusted data inside a delimited block. The model has no tools. 
 
 Provider chain: ordered, each with its own thresholds. Default `[jev]`. Example: Jev at 0.80, then an LLM at 0.70, then `needs_review`. A provider error tries the next provider. If all fail, leave the message and retry next run. Never send mail to a provider the user has not enabled.
 
-Cache key: SHA-256 of normalized features, categories hash, and provider/model. Value: the decision, in SQLite.
+Cache key: SHA-256 of normalized features, categories hash, and provider/model. Value: the decision, in SQLite. The classification cache is the `classification_cache` table in `mailsorter.db`. Run and undo tables come later.
+
+Before a remote call, card-like numbers (13–19 digits with single spaces or dashes), IBANs, and runs of 8 or more digits are redacted. Eight is a product choice; the spec does not set the length. Rules still see the unredacted text. Email and phone redaction stay off.
 
 ## Engine
 
@@ -287,4 +312,5 @@ These stay `// VERIFY` until the cited source is read in the phase that implemen
 - Zoho personal IMAP hosts outside `imap.zoho.com` and `imappro.zoho.com`. The current IMAP guide says to paste the datacenter host from the account.
 - A live ISPDB domain document. The index `https://autoconfig.thunderbird.net/v1.1/` exists; `gmail.com` returned HTTP 500. Thunderbird's autoconfig page says it does not use DNS SRV; this program still tries RFC 6186 last.
 - `imapclient` `UID MOVE` and `UID EXPUNGE` behavior. `Authenticate(sasl.Client) error` is the pinned signature; XOAUTH2 is phase 5.
-- OpenAI-compatible and Anthropic request bodies, checked when those adapters are written.
+- A live Jev, OpenAI, or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
+- Anthropic models that reject `tool_choice` type `tool` (the primer names Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1). The client retries a 400 without the force, then once without `strict`. That fallback was not verified against a live model.

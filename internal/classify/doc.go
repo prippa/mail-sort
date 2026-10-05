@@ -1,4 +1,4 @@
-// Package classify will score a cleaned message against the user's categories.
-// The default provider is Jev. No provider is called until the user enables it.
-// Phase 0 has no classifier yet.
+// Package classify scores one cleaned message against the user's categories.
+// Rules run first. A provider is called only when the user enabled it.
+// Nothing in this package moves or deletes mail.
 package classify

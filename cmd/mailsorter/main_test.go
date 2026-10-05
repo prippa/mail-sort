@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -135,8 +136,13 @@ func TestOAuthDoesNotDial(t *testing.T) {
 
 func runCmd(t *testing.T, args ...string) (string, string, int) {
 	t.Helper()
+	return runCmdIn(t, strings.NewReader(""), args...)
+}
+
+func runCmdIn(t *testing.T, stdin io.Reader, args ...string) (string, string, int) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := run(args, &stdout, &stderr)
+	code := run(args, stdin, &stdout, &stderr)
 	return stdout.String(), stderr.String(), code
 }
 

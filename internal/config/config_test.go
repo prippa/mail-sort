@@ -174,6 +174,65 @@ profiles:
 	}
 }
 
+func TestLoadClassifiers(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, `
+language: en
+categories_file: categories.yaml
+classifiers:
+  - provider: jev
+    model: jev-1.13.0
+    base_url: https://api.typesafe.ai
+    min_confidence: 0.8
+    rps: 2
+    burst: 4
+    price_input: 0.042
+  - provider: openai_compatible
+    model: user-model
+    base_url: https://api.openai.com/v1
+    key_env: OPENAI_API_KEY
+    min_confidence: 0.7
+  - provider: anthropic
+    model: user-model
+    key_env: ANTHROPIC_API_KEY
+`)
+	cfg, err := Load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CategoriesFile != "categories.yaml" || len(cfg.Classifiers) != 3 {
+		t.Fatalf("cfg=%+v", cfg)
+	}
+	if cfg.Classifiers[0].Provider != "jev" || cfg.Classifiers[0].MinConfidence != 0.8 || cfg.Classifiers[0].Burst != 4 {
+		t.Fatalf("jev=%+v", cfg.Classifiers[0])
+	}
+	if cfg.Classifiers[1].KeyEnv != "OPENAI_API_KEY" || cfg.Classifiers[2].Provider != "anthropic" {
+		t.Fatalf("classifiers=%+v", cfg.Classifiers)
+	}
+
+	const secret = "secret-value-should-not-appear"
+	bad := writeConfig(t, "classifiers:\n  - provider: jev\n    api_key: "+secret+"\n")
+	_, err = Load(context.Background(), bad)
+	if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "api_key") {
+		t.Fatalf("err=%v", err)
+	}
+	bad = writeConfig(t, "classifiers:\n  - provider: openai_compatible\n    model: user-model\n    key_env: OPENAI_API_KEY\n    base_url: https://user:"+secret+"@example.com/v1\n")
+	_, err = Load(context.Background(), bad)
+	if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "base_url") {
+		t.Fatalf("err=%v", err)
+	}
+	bad = writeConfig(t, "classifiers:\n  - provider: openai_compatible\n    base_url: https://api.openai.com/v1\n    key_env: OPENAI_API_KEY\n")
+	_, err = Load(context.Background(), bad)
+	if err == nil || !strings.Contains(err.Error(), "model") {
+		t.Fatalf("err=%v", err)
+	}
+	bad = writeConfig(t, "classifiers:\n  - provider: jev\n    min_confidence: 1.5\n")
+	_, err = Load(context.Background(), bad)
+	if err == nil || strings.Contains(err.Error(), "1.5") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestLoadCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

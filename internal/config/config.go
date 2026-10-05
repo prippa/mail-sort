@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -26,8 +28,25 @@ var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Config is the on-disk settings file. Credentials are references only.
 type Config struct {
-	Language string    `yaml:"language"`
-	Profiles []Profile `yaml:"profiles"`
+	Language       string       `yaml:"language"`
+	Profiles       []Profile    `yaml:"profiles"`
+	CategoriesFile string       `yaml:"categories_file"`
+	Classifiers    []Classifier `yaml:"classifiers"`
+}
+
+// Classifier is one enabled model. The API key is the environment variable
+// named by key_env, never a value in this file. An empty list calls no provider.
+type Classifier struct {
+	Provider      string  `yaml:"provider"`
+	Model         string  `yaml:"model"`
+	BaseURL       string  `yaml:"base_url"`
+	KeyEnv        string  `yaml:"key_env"`
+	MinConfidence float64 `yaml:"min_confidence"`
+	MinMargin     float64 `yaml:"min_margin"`
+	RPS           float64 `yaml:"rps"`
+	Burst         int     `yaml:"burst"`
+	PriceInput    float64 `yaml:"price_input"`
+	PriceOutput   float64 `yaml:"price_output"`
 }
 
 // Profile is one mailbox. Empty host, port, and security are filled from the
@@ -50,8 +69,23 @@ type Profile struct {
 }
 
 var configFields = map[string]struct{}{
-	"language": {},
-	"profiles": {},
+	"language":        {},
+	"profiles":        {},
+	"categories_file": {},
+	"classifiers":     {},
+}
+
+var classifierFields = map[string]struct{}{
+	"provider":       {},
+	"model":          {},
+	"base_url":       {},
+	"key_env":        {},
+	"min_confidence": {},
+	"min_margin":     {},
+	"rps":            {},
+	"burst":          {},
+	"price_input":    {},
+	"price_output":   {},
 }
 
 var profileFields = map[string]struct{}{
@@ -139,6 +173,10 @@ func validateTree(doc *yaml.Node) error {
 			return checkChoice(keyNode, val, "auto", "en", "ru")
 		case "profiles":
 			return validateProfiles(val)
+		case "categories_file":
+			return checkScalar(keyNode, val)
+		case "classifiers":
+			return validateClassifiers(val)
 		default:
 			return fmt.Errorf("config: unknown field %q at line %d", keyNode.Value, keyNode.Line)
 		}
@@ -184,7 +222,7 @@ func validateProfiles(val *yaml.Node) error {
 			case "auth":
 				return checkChoice(keyNode, field, "password", "oauth_google", "oauth_microsoft")
 			case "password_env":
-				return checkEnvName(field)
+				return checkEnvName(keyNode, field)
 			case "cert_sha256":
 				return checkFingerprint(field)
 			case "discover":
@@ -320,12 +358,148 @@ func checkMaxChars(val *yaml.Node) error {
 	return nil
 }
 
-func checkEnvName(val *yaml.Node) error {
+func validateClassifiers(val *yaml.Node) error {
+	if isNull(val) {
+		return nil
+	}
+	if val.Kind != yaml.SequenceNode {
+		return fmt.Errorf("config: field \"classifiers\" at line %d must be a list", val.Line)
+	}
+	for _, item := range val.Content {
+		if item.Kind != yaml.MappingNode {
+			return fmt.Errorf("config: classifier at line %d must be a mapping", item.Line)
+		}
+		var provider, model, keyEnv, base string
+		err := walkMapping(item, classifierFields, func(key string, keyNode, field *yaml.Node) error {
+			switch key {
+			case "provider":
+				if err := checkChoice(keyNode, field, "jev", "openai_compatible", "anthropic"); err != nil {
+					return err
+				}
+				if field.Kind != yaml.ScalarNode || isNull(field) || field.Value == "" {
+					return fmt.Errorf("config: classifier at line %d is missing a provider", field.Line)
+				}
+				provider = field.Value
+				return nil
+			case "model":
+				if err := checkScalar(keyNode, field); err != nil {
+					return err
+				}
+				if field.Kind == yaml.ScalarNode && !isNull(field) {
+					model = field.Value
+				}
+				return nil
+			case "base_url":
+				if err := checkBaseURL(keyNode, field); err != nil {
+					return err
+				}
+				if field.Kind == yaml.ScalarNode && !isNull(field) {
+					base = field.Value
+				}
+				return nil
+			case "key_env":
+				if err := checkEnvName(keyNode, field); err != nil {
+					return err
+				}
+				if field.Kind == yaml.ScalarNode && !isNull(field) {
+					keyEnv = field.Value
+				}
+				return nil
+			case "min_confidence":
+				return checkPositiveUnit(keyNode, field)
+			case "min_margin":
+				return checkNumber(keyNode.Value, field, 0, 1)
+			case "rps":
+				return checkNumber(keyNode.Value, field, 0, 1000)
+			case "burst":
+				return checkInt(keyNode.Value, field, 0, 10000)
+			case "price_input", "price_output":
+				return checkNumber(keyNode.Value, field, 0, 1_000_000)
+			default:
+				return fmt.Errorf("config: unknown field %q at line %d", keyNode.Value, keyNode.Line)
+			}
+		})
+		if err != nil {
+			return err
+		}
+		if provider == "" {
+			return fmt.Errorf("config: classifier at line %d is missing a provider", item.Line)
+		}
+		if provider != "jev" && strings.TrimSpace(model) == "" {
+			return fmt.Errorf("config: classifier at line %d is missing a model", item.Line)
+		}
+		if provider != "jev" && keyEnv == "" {
+			return fmt.Errorf("config: classifier at line %d is missing key_env", item.Line)
+		}
+		if provider == "openai_compatible" && strings.TrimSpace(base) == "" {
+			return fmt.Errorf("config: classifier at line %d is missing base_url", item.Line)
+		}
+	}
+	return nil
+}
+
+func checkEnvName(keyNode, val *yaml.Node) error {
 	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
 		return nil
 	}
 	if val.Kind != yaml.ScalarNode || !envNamePattern.MatchString(val.Value) {
-		return fmt.Errorf("config: field \"password_env\" at line %d must be an environment variable name", val.Line)
+		return fmt.Errorf("config: field %q at line %d must be an environment variable name", keyNode.Value, val.Line)
+	}
+	return nil
+}
+
+func checkBaseURL(keyNode, val *yaml.Node) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && strings.TrimSpace(val.Value) == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field %q at line %d must be an http or https URL", keyNode.Value, keyNode.Line)
+	}
+	parsed, err := url.Parse(val.Value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return fmt.Errorf("config: field %q at line %d must be an http or https URL", keyNode.Value, keyNode.Line)
+	}
+	return nil
+}
+
+func checkPositiveUnit(keyNode, val *yaml.Node) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field %q at line %d must be a number", keyNode.Value, val.Line)
+	}
+	n, err := strconv.ParseFloat(val.Value, 64)
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n <= 0 || n > 1 {
+		return fmt.Errorf("config: field %q at line %d must be greater than 0 and at most 1", keyNode.Value, val.Line)
+	}
+	return nil
+}
+
+func checkNumber(key string, val *yaml.Node, min, max float64) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field %q at line %d must be a number", key, val.Line)
+	}
+	n, err := strconv.ParseFloat(val.Value, 64)
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < min || n > max {
+		return fmt.Errorf("config: field %q at line %d is out of range", key, val.Line)
+	}
+	return nil
+}
+
+func checkInt(key string, val *yaml.Node, min, max int) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field %q at line %d must be a whole number", key, val.Line)
+	}
+	n, err := strconv.Atoi(val.Value)
+	if err != nil || n < min || n > max {
+		return fmt.Errorf("config: field %q at line %d is out of range", key, val.Line)
 	}
 	return nil
 }

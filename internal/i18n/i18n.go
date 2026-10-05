@@ -21,6 +21,7 @@ var catalog = map[Lang]map[string]string{
 		"action.next":            "Next",
 		"category.needs_review":  "Needs review",
 		"category.keep_in_inbox": "Keep in Inbox",
+		"category.never_touch":   "Do not touch",
 	},
 	RU: {
 		"app.name":               "MailSorter",
@@ -29,6 +30,7 @@ var catalog = map[Lang]map[string]string{
 		"action.next":            "Далее",
 		"category.needs_review":  "Нужно проверить",
 		"category.keep_in_inbox": "Оставить во входящих",
+		"category.never_touch":   "Не трогать",
 	},
 }
 
