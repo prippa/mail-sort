@@ -1,0 +1,26 @@
+---
+description: Mail safety, secrets, and network limits for MailSorter
+alwaysApply: true
+---
+
+# MailSorter hard constraints
+
+These apply to every phase. Provider notes and pins are in docs/SPEC.md.
+
+1. Never delete mail. Move, copy, or label only. Do not issue a plain EXPUNGE. Do not open Trash, Junk, Drafts, or Sent unless the user selected that folder as a source.
+2. Never change read state. Fetch with BODY.PEEK (`FetchItemBodySection.Peek`). Do not set `\Seen`.
+3. On error or uncertainty, leave the message where it is, or file it to Needs review when that is the configured policy.
+4. The first run of every profile is a dry run. Persist the user's confirmation in SQLite before any later run moves mail.
+5. Build with `CGO_ENABLED=0` for `windows/amd64`, `linux/amd64`, and `linux/arm64`. No cgo dependencies.
+6. No telemetry and no auto-update. Network traffic may go only to the user's mail server, enabled classifier endpoints, OAuth endpoints, and autodiscovery after an explicit opt-in.
+7. Passwords, API keys, and tokens must not appear in logs, config files, or error strings.
+
+```go
+// Rejected: the error value would echo the token.
+return fmt.Errorf("auth failed: %s", token)
+
+// Required: name the field, keep the value out.
+return fmt.Errorf("config: field %q is not allowed in config files", key)
+```
+
+UID EXPUNGE is allowed only for the UIDs just copied, and only when MOVE is unavailable and UIDPLUS is advertised. If neither MOVE nor UIDPLUS exists, refuse to move.

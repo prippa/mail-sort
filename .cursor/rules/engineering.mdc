@@ -1,0 +1,17 @@
+---
+description: How to implement MailSorter without inventing protocols or leaking secrets
+alwaysApply: true
+---
+
+# Implementation
+
+- Code, comments, and docs are English. User-interface strings exist in English and Russian.
+- IMAP types stay inside `internal/mail`.
+- Define interfaces at the consumer. Pass `context.Context` through I/O. Wrap errors with context.
+- Do not invent provider hosts, OAuth scopes, or API bodies. Check current docs or the pinned module source. Mark anything unverified with `// VERIFY` and list it in the phase report.
+- Stubs return a clear not-implemented error. Do not put fake messages, capabilities, or classification results on a production path.
+- One conventional commit per phase. After the phase tests pass, stop until the user says `next`.
+- Category criteria sent to a model are English. Russian is for display strings.
+- Default classifier is Jev (`jev-1.13.0`) at `POST {base}/v1/systemone`. Ship no OAuth client id in source; `-ldflags` may set one.
+
+Pinned modules and the preset table are in docs/SPEC.md.
