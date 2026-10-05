@@ -33,7 +33,14 @@ func runUI(cfg config.Config, configPath string, stdout, stderr io.Writer) int {
 		return writeError(stderr, err)
 	}
 	defer func() { _ = closer.Close() }()
-	srv, err := ui.Start(ctx, ui.Options{ConfigPath: configPath, Logger: logger})
+	var browser func(string) error
+	if launchBrowser {
+		browser = func(url string) error {
+			openBrowser(url)
+			return nil
+		}
+	}
+	srv, err := ui.Start(ctx, ui.Options{ConfigPath: configPath, Logger: logger, OpenBrowser: browser})
 	if err != nil {
 		logger.Error("ui failed", slog.String("error", err.Error()))
 		return writeError(stderr, err)

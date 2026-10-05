@@ -9,8 +9,7 @@ import (
 
 // Resolve turns a profile into an account. An explicit host wins over the
 // preset. Discovery is left for the caller and only when the provider is
-// custom, the host is empty, and discover is set. OAuth fails here, before
-// any network call.
+// custom, the host is empty, and discover is set.
 func Resolve(profile config.Profile, presets []Preset) (Account, error) {
 	provider := strings.TrimSpace(profile.Provider)
 	custom := provider == "" || provider == "custom"
@@ -43,6 +42,9 @@ func Resolve(profile config.Profile, presets []Preset) (Account, error) {
 	if auth == AuthPassword && strings.TrimSpace(account.Username) == "" {
 		return Account{}, fmt.Errorf("imap: profile %q is missing a username", profile.Name)
 	}
+	if (auth == AuthOAuthGoogle || auth == AuthOAuthMicrosoft) && strings.TrimSpace(account.Email) == "" {
+		return Account{}, fmt.Errorf("imap: profile %q is missing an email", profile.Name)
+	}
 	return account, nil
 }
 
@@ -56,10 +58,10 @@ func selectAuth(profile config.Profile, preset Preset, custom bool) (AuthMode, e
 		switch {
 		case contains(allowed, string(AuthPassword)) && profile.PasswordEnv != "":
 			choice = string(AuthPassword)
-		case contains(allowed, "oauth_google"):
-			return "", phaseError("5", "oauth_google is not implemented yet (phase 5). Set auth: password to use an app password")
-		case contains(allowed, "oauth_microsoft"):
-			return "", phaseError("5", "oauth_microsoft is not implemented yet (phase 5)")
+		case contains(allowed, string(AuthOAuthGoogle)):
+			choice = string(AuthOAuthGoogle)
+		case contains(allowed, string(AuthOAuthMicrosoft)):
+			choice = string(AuthOAuthMicrosoft)
 		case contains(allowed, string(AuthPassword)):
 			choice = string(AuthPassword)
 		default:
@@ -72,13 +74,9 @@ func selectAuth(profile config.Profile, preset Preset, custom bool) (AuthMode, e
 		}
 		return "", fmt.Errorf("imap: auth %q is not supported for this provider", choice)
 	}
-	switch choice {
-	case "oauth_google":
-		return "", phaseError("5", "oauth_google is not implemented yet (phase 5)")
-	case "oauth_microsoft":
-		return "", phaseError("5", "oauth_microsoft is not implemented yet (phase 5)")
-	case string(AuthPassword):
-		return AuthPassword, nil
+	switch AuthMode(choice) {
+	case AuthOAuthGoogle, AuthOAuthMicrosoft, AuthPassword:
+		return AuthMode(choice), nil
 	default:
 		return "", fmt.Errorf("imap: auth %q is not supported", choice)
 	}

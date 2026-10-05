@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,9 @@ func TestSaveRoundTripAndPrivacy(t *testing.T) {
 			Email:       "ada@example.com",
 			PasswordEnv: "MAIL_SORTER_PASSWORD_WORK",
 			Auth:        "password",
+			ClientID:    "desktop-client",
+			Tenant:      "common",
+			DeviceCode:  true,
 		}},
 		Privacy: Privacy{RedactEmail: true, LocalOnly: true},
 	}
@@ -37,7 +41,7 @@ func TestSaveRoundTripAndPrivacy(t *testing.T) {
 	if loaded.Language != "ru" || !loaded.Privacy.RedactEmail || !loaded.Privacy.LocalOnly || loaded.Privacy.RulesOnly {
 		t.Fatalf("%+v", loaded)
 	}
-	if len(loaded.Profiles) != 1 || loaded.Profiles[0].PasswordEnv != "MAIL_SORTER_PASSWORD_WORK" {
+	if len(loaded.Profiles) != 1 || loaded.Profiles[0].PasswordEnv != "MAIL_SORTER_PASSWORD_WORK" || loaded.Profiles[0].ClientID != "desktop-client" || loaded.Profiles[0].Tenant != "common" || !loaded.Profiles[0].DeviceCode {
 		t.Fatalf("%+v", loaded.Profiles)
 	}
 	raw, err := os.ReadFile(path)
@@ -55,5 +59,9 @@ func TestSaveRoundTripAndPrivacy(t *testing.T) {
 	unknown := []byte("privacy:\n  extra: true\n")
 	if _, err := parse(unknown); err == nil {
 		t.Fatal("unknown privacy field was accepted")
+	}
+	secretClient := []byte("profiles:\n  - name: Work\n    provider: gmail\n    username: ada@example.com\n    email: ada@example.com\n    auth: oauth_google\n    client_secret: nope\n")
+	if _, err := parse(secretClient); err == nil || strings.Contains(err.Error(), "nope") {
+		t.Fatalf("client secret err = %v", err)
 	}
 }

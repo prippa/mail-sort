@@ -108,7 +108,14 @@ func runClassify(cfg config.Config, configPath string, args []string, stdin io.R
 			_ = closer.Close()
 		}
 	}()
-	providers, err := classify.Providers(cfg.Classifiers, os.LookupEnv, logger, nil)
+	keys, err := newSecretLookup()
+	if err != nil {
+		return writeError(stderr, err)
+	}
+	providers, err := classify.Providers(cfg.Classifiers, keys.get, logger, nil)
+	if keys.err != nil {
+		err = keys.err
+	}
 	if err != nil {
 		logger.Error("classify failed", slog.String("error", err.Error()))
 		return writeError(stderr, err)

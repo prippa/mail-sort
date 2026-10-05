@@ -38,29 +38,35 @@ const (
 
 // Options configures one local UI process.
 type Options struct {
-	ConfigPath string
-	Logger     *slog.Logger
-	Lookup     func(string) (string, bool)
-	HTTPClient *http.Client
+	ConfigPath  string
+	Logger      *slog.Logger
+	Lookup      func(string) (string, bool)
+	HTTPClient  *http.Client
+	OpenBrowser func(string) error
 }
 
 // Server is the local UI. URL includes the per-launch token in the fragment
 // so the token is not sent as a query string.
 type Server struct {
-	URL        string
-	configPath string
-	stateDir   string
-	host       string
-	origin     string
-	token      string
-	db         *store.DB
-	cache      *classify.SQLite
-	log        *slog.Logger
-	lookup     func(string) (string, bool)
-	httpClient *http.Client
-	http       *http.Server
-	mu         sync.Mutex
-	once       sync.Once
+	URL         string
+	configPath  string
+	stateDir    string
+	host        string
+	origin      string
+	token       string
+	db          *store.DB
+	cache       *classify.SQLite
+	log         *slog.Logger
+	lookup      func(string) (string, bool)
+	httpClient  *http.Client
+	openBrowser func(string) error
+	http        *http.Server
+	mu          sync.Mutex
+	once        sync.Once
+	vaultOnce   sync.Once
+	vault       secrets.Store
+	vaultErr    error
+	signIns     map[string]*signIn
 }
 
 // Start listens on 127.0.0.1 and a random port.
@@ -116,17 +122,19 @@ func Start(ctx context.Context, opt Options) (*Server, error) {
 	}
 	host := net.JoinHostPort(tcp.IP.String(), strconv.Itoa(tcp.Port))
 	srv := &Server{
-		URL:        "http://" + host + "/#" + token,
-		configPath: opt.ConfigPath,
-		stateDir:   stateDir,
-		host:       host,
-		origin:     "http://" + host,
-		token:      token,
-		db:         db,
-		cache:      cache,
-		log:        opt.Logger,
-		lookup:     opt.Lookup,
-		httpClient: opt.HTTPClient,
+		URL:         "http://" + host + "/#" + token,
+		configPath:  opt.ConfigPath,
+		stateDir:    stateDir,
+		host:        host,
+		origin:      "http://" + host,
+		token:       token,
+		db:          db,
+		cache:       cache,
+		log:         opt.Logger,
+		lookup:      opt.Lookup,
+		httpClient:  opt.HTTPClient,
+		openBrowser: opt.OpenBrowser,
+		signIns:     map[string]*signIn{},
 	}
 	srv.http = &http.Server{
 		Handler:           srv,
@@ -156,6 +164,13 @@ func Start(ctx context.Context, opt Options) (*Server, error) {
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		s.mu.Lock()
+		for _, item := range s.signIns {
+			if item.cancel != nil {
+				item.cancel()
+			}
+		}
+		s.mu.Unlock()
 		err = s.http.Shutdown(ctx)
 		if s.cache != nil {
 			_ = s.cache.Close()
@@ -276,6 +291,12 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.activity(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/run":
 		s.currentRun(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/oauth/start":
+		s.startOAuth(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/oauth/status":
+		s.oauthStatus(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/classifiers/key":
+		s.saveClassifierKey(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/profiles":
 		s.saveProfile(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/profiles/test":

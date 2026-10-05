@@ -1,5 +1,6 @@
 // Package secrets names where credentials live and which keys must never be
-// written to config or logs. Storage backends arrive in a later phase.
+// written to config or logs. Long-lived secrets go in the keyring. Access
+// tokens stay in memory.
 package secrets
 
 import "strings"

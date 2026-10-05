@@ -175,7 +175,7 @@ func TestOAuthDoesNotDial(t *testing.T) {
 	}
 	t.Setenv("MAIL_SORTER_PASSWORD_WORK", secret)
 	_, stderr, code := runCmd(t, "--config", path, "test-conn", "--profile", "Work")
-	if code != 2 || !strings.Contains(stderr, "phase 5") || strings.Contains(stderr, secret) {
+	if code == 0 || !strings.Contains(stderr, "not signed in") || strings.Contains(stderr, secret) || strings.Contains(stderr, "phase 5") {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 	select {

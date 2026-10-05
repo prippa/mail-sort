@@ -104,13 +104,13 @@ func TestResolveAuthAndHosts(t *testing.T) {
 	if gmail.Endpoint.Host != "imap.gmail.com" || gmail.Auth != AuthPassword {
 		t.Fatalf("gmail = %+v", gmail)
 	}
-	_, err = Resolve(profileAuth("Gmail", "gmail", "oauth_google"), presets)
-	if _, ok := err.(*PhaseError); !ok {
-		t.Fatalf("oauth err = %v", err)
+	gmailOAuth, err := Resolve(profileAuth("Gmail", "gmail", "oauth_google"), presets)
+	if err != nil || gmailOAuth.Auth != AuthOAuthGoogle || gmailOAuth.Endpoint.Host != "imap.gmail.com" {
+		t.Fatalf("oauth = %+v err=%v", gmailOAuth, err)
 	}
-	_, err = Resolve(profile("Work", "microsoft", "MAIL_SORTER_PASSWORD_WORK"), presets)
-	if _, ok := err.(*PhaseError); !ok {
-		t.Fatalf("microsoft err = %v", err)
+	microsoft, err := Resolve(profile("Work", "microsoft", "MAIL_SORTER_PASSWORD_WORK"), presets)
+	if err != nil || microsoft.Auth != AuthOAuthMicrosoft || microsoft.Endpoint.Host != "outlook.office365.com" {
+		t.Fatalf("microsoft = %+v err=%v", microsoft, err)
 	}
 	_, err = Resolve(profileAuth("Work", "microsoft", "password"), presets)
 	if err == nil || !strings.Contains(err.Error(), "OAuth2") {

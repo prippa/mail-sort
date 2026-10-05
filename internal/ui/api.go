@@ -17,6 +17,7 @@ import (
 	"github.com/prippa/mail-sort/internal/i18n"
 	"github.com/prippa/mail-sort/internal/mail"
 	"github.com/prippa/mail-sort/internal/message"
+	"github.com/prippa/mail-sort/internal/secrets"
 	"github.com/prippa/mail-sort/internal/store"
 )
 
@@ -77,6 +78,10 @@ func (s *Server) profileViews(ctx context.Context, cfg config.Config) []map[stri
 			"password_env": profile.PasswordEnv,
 			"password_set": lookupSet(s.lookup, profile.PasswordEnv),
 			"auth":         profile.Auth,
+			"client_id":    profile.ClientID,
+			"tenant":       profile.Tenant,
+			"device_code":  profile.DeviceCode,
+			"signed_in":    s.signedIn(profile.Name),
 			"discover":     profile.Discover,
 			"max_chars":    profile.MaxChars,
 			"confirmed":    confirmed,
@@ -145,7 +150,7 @@ func (s *Server) classifierViews(cfg config.Config) []map[string]any {
 			"model":          spec.Model,
 			"base_url":       base,
 			"key_env":        spec.KeyEnv,
-			"key_set":        lookupSet(s.lookup, envName),
+			"key_set":        s.keySet(envName),
 			"min_confidence": spec.MinConfidence,
 			"min_margin":     spec.MinMargin,
 			"rps":            spec.RPS,
@@ -206,6 +211,10 @@ type profileBody struct {
 	Username    string `json:"username"`
 	PasswordEnv string `json:"password_env"`
 	Email       string `json:"email"`
+	Auth        string `json:"auth"`
+	ClientID    string `json:"client_id"`
+	Tenant      string `json:"tenant"`
+	DeviceCode  bool   `json:"device_code"`
 	Discover    bool   `json:"discover"`
 	MaxChars    int    `json:"max_chars"`
 }
@@ -230,7 +239,10 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		Username:    strings.TrimSpace(body.Username),
 		PasswordEnv: strings.TrimSpace(body.PasswordEnv),
 		Email:       strings.TrimSpace(body.Email),
-		Auth:        "password",
+		Auth:        strings.TrimSpace(body.Auth),
+		ClientID:    strings.TrimSpace(body.ClientID),
+		Tenant:      strings.TrimSpace(body.Tenant),
+		DeviceCode:  body.DeviceCode,
 		Discover:    body.Discover,
 		MaxChars:    body.MaxChars,
 	}
@@ -249,14 +261,26 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
-	if _, err := mail.Resolve(profile, presets); err != nil {
+	account, err := mail.Resolve(profile, presets)
+	if err != nil {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
-	if profile.PasswordEnv == "" {
+	if profile.Auth == "" {
+		profile.Auth = string(account.Auth)
+	}
+	if profile.Auth == "password" && profile.PasswordEnv == "" {
 		s.fail(w, http.StatusBadRequest, "config: profile has no password_env")
 		return
 	}
+	if err := s.storeProfile(r.Context(), cfg, profile); err != nil {
+		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
+		return
+	}
+	s.bootstrap(w, r)
+}
+
+func (s *Server) storeProfile(ctx context.Context, cfg config.Config, profile config.Profile) error {
 	replaced := false
 	for i := range cfg.Profiles {
 		if cfg.Profiles[i].Name == profile.Name {
@@ -267,11 +291,7 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	if !replaced {
 		cfg.Profiles = append(cfg.Profiles, profile)
 	}
-	if err := config.Save(r.Context(), s.configPath, cfg); err != nil {
-		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
-		return
-	}
-	s.bootstrap(w, r)
+	return config.Save(ctx, s.configPath, cfg)
 }
 
 type nameBody struct {
@@ -296,6 +316,9 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.ForgetProfile(r.Context(), name); err != nil {
 		s.fail(w, http.StatusConflict, s.publicError(cfg, err))
 		return
+	}
+	if vault, err := s.secretStore(); err == nil {
+		_ = vault.Delete(secrets.RefreshAccount(name))
 	}
 	next := cfg.Profiles[:0]
 	for _, profile := range cfg.Profiles {
@@ -636,7 +659,7 @@ func (s *Server) tryClassify(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
-	providers, err := classify.Providers(cfg.Classifiers, s.lookup, s.log, s.httpClient)
+	providers, err := classify.Providers(cfg.Classifiers, s.secretLookup, s.log, s.httpClient)
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
@@ -783,7 +806,7 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
-	providers, err := classify.Providers(cfg.Classifiers, s.lookup, s.log, s.httpClient)
+	providers, err := classify.Providers(cfg.Classifiers, s.secretLookup, s.log, s.httpClient)
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
@@ -1156,14 +1179,18 @@ func (s *Server) connect(ctx context.Context, profile config.Profile) (*mail.Ses
 		account.Endpoint.Port = found.Port
 		account.Endpoint.Security = found.Security
 	}
-	if account.Auth != mail.AuthPassword {
-		return nil, account, errors.New("imap: password auth is required")
+	if account.Auth == mail.AuthPassword {
+		password, err := s.password(profile.PasswordEnv)
+		if err != nil {
+			return nil, account, err
+		}
+		session, err := mail.NewClient().Connect(ctx, account, password)
+		if err != nil {
+			return nil, account, err
+		}
+		return session, account, nil
 	}
-	password, err := s.password(profile.PasswordEnv)
-	if err != nil {
-		return nil, account, err
-	}
-	session, err := mail.NewClient().Connect(ctx, account, password)
+	session, err := s.connectOAuth(ctx, profile, account)
 	if err != nil {
 		return nil, account, err
 	}

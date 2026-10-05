@@ -16,6 +16,8 @@ import (
 	"github.com/prippa/mail-sort/internal/logging"
 	"github.com/prippa/mail-sort/internal/mail"
 	"github.com/prippa/mail-sort/internal/message"
+	"github.com/prippa/mail-sort/internal/oauth"
+	"github.com/prippa/mail-sort/internal/secrets"
 )
 
 func runTestConn(cfg config.Config, args []string, stdout, stderr io.Writer) int {
@@ -136,15 +138,8 @@ func withSession(cfg config.Config, name string, stderr io.Writer, timeout time.
 		account.Endpoint.Port = found.Port
 		account.Endpoint.Security = found.Security
 	}
-	var password string
-	if account.Auth == mail.AuthPassword {
-		password, err = passwordFromEnv(profile.PasswordEnv)
-		if err != nil {
-			return loggedError(logger, stderr, err)
-		}
-	}
 	logger.Info("connect", slog.String("profile", profile.Name), slog.String("host", account.Endpoint.Host))
-	session, err := mail.NewClient().Connect(ctx, account, password)
+	session, err := connectAccount(ctx, profile, account)
 	if err != nil {
 		return loggedError(logger, stderr, err)
 	}
@@ -171,6 +166,38 @@ func findProfile(cfg config.Config, name string) (config.Profile, error) {
 		}
 	}
 	return config.Profile{}, fmt.Errorf("config: no profile named %q", name)
+}
+
+func connectAccount(ctx context.Context, profile config.Profile, account mail.Account) (*mail.Session, error) {
+	if account.Auth == mail.AuthPassword {
+		password, err := passwordFromEnv(profile.PasswordEnv)
+		if err != nil {
+			return nil, err
+		}
+		return mail.NewClient().Connect(ctx, account, password)
+	}
+	store, err := openSecrets()
+	if err != nil {
+		return nil, err
+	}
+	refresh, err := store.Get(secrets.RefreshAccount(profile.Name))
+	if errors.Is(err, secrets.ErrNotFound) {
+		return nil, oauth.ErrNotSignedIn
+	}
+	if err != nil {
+		return nil, err
+	}
+	oAccount, err := oauth.FromProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	source, err := oauth.NewSource(oAccount, refresh, func(next string) error {
+		return store.Set(secrets.RefreshAccount(profile.Name), next)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mail.NewClient().ConnectOAuth(ctx, account, source)
 }
 
 func passwordFromEnv(name string) (string, error) {

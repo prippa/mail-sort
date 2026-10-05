@@ -2,7 +2,10 @@
 // IMAP types stay in this package. Callers see folders and message.Input values.
 package mail
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // PhaseError is a command this phase does not run. The CLI exits 2.
 type PhaseError struct {
@@ -17,10 +20,6 @@ func (e *PhaseError) Error() string {
 	return e.Text
 }
 
-func phaseError(phase, text string) error {
-	return &PhaseError{Phase: phase, Text: text}
-}
-
 // Security is how the TCP connection is protected. Cleartext is not a value.
 type Security string
 
@@ -29,12 +28,21 @@ const (
 	StartTLS    Security = "starttls"
 )
 
-// AuthMode is the login method. OAuth values fail before a connection is opened.
+// AuthMode is the login method.
 type AuthMode string
 
 const (
-	AuthPassword AuthMode = "password"
+	AuthPassword       AuthMode = "password"
+	AuthOAuthGoogle    AuthMode = "oauth_google"
+	AuthOAuthMicrosoft AuthMode = "oauth_microsoft"
 )
+
+// TokenSource supplies an IMAP access token. ForceRefresh is used once after
+// AUTHENTICATE fails. Access tokens are not written to disk here.
+type TokenSource interface {
+	AccessToken(ctx context.Context) (string, error)
+	ForceRefresh(ctx context.Context) (string, error)
+}
 
 // Endpoint is the server a profile will dial.
 type Endpoint struct {

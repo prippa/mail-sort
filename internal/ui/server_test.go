@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/prippa/mail-sort/internal/i18n"
+	"github.com/prippa/mail-sort/internal/secrets"
 )
 
 func TestUISecurityAndPreview(t *testing.T) {
@@ -228,6 +230,67 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %o", info.Mode().Perm())
+	}
+}
+
+func TestOAuthStartAndKeyStayLocal(t *testing.T) {
+	srv := startUI(t)
+	t.Setenv(secrets.EnvMasterPassword, "test-master")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan struct{}, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
+			accepted <- struct{}{}
+		}
+	}()
+	host, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key = "classifier-secret-value"
+	started := call(t, srv, http.MethodPost, "/api/oauth/start", `{
+		"name":"Gmail","provider":"gmail","host":"`+host+`","port":`+port+`,
+		"username":"ada@example.com","email":"ada@example.com","auth":"oauth_google"
+	}`, true)
+	startedBody := readAll(t, started)
+	if started.StatusCode != http.StatusBadRequest || !strings.Contains(startedBody, "client id is empty") || strings.Contains(startedBody, key) {
+		t.Fatalf("start %d %s", started.StatusCode, startedBody)
+	}
+	if raw, err := os.ReadFile(srv.configPath); err == nil && strings.Contains(string(raw), "Gmail") {
+		t.Fatalf("empty client id was saved: %s", raw)
+	}
+	select {
+	case <-accepted:
+		t.Fatal("sign-in dialed the mailbox")
+	case <-time.After(50 * time.Millisecond):
+	}
+	listed := call(t, srv, http.MethodPost, "/api/classifiers", `{"classifiers":[{"provider":"jev","model":"jev-1.13.0"}]}`, true)
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("classifier %d %s", listed.StatusCode, readAll(t, listed))
+	}
+	_ = listed.Body.Close()
+	saved := call(t, srv, http.MethodPost, "/api/classifiers/key", `{"provider":"jev","value":"`+key+`"}`, true)
+	savedBody := readAll(t, saved)
+	if saved.StatusCode != http.StatusOK || strings.Contains(savedBody, key) {
+		t.Fatalf("key %d %s", saved.StatusCode, savedBody)
+	}
+	raw, err := os.ReadFile(srv.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), key) {
+		t.Fatal("config contains the key")
+	}
+	boot := call(t, srv, http.MethodGet, "/api/bootstrap", "", true)
+	bootBody := readAll(t, boot)
+	if !strings.Contains(bootBody, `"key_set":true`) || strings.Contains(bootBody, key) {
+		t.Fatalf("bootstrap %s", bootBody)
 	}
 }
 

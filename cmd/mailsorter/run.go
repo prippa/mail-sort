@@ -278,7 +278,15 @@ func runMail(cfg config.Config, configPath string, args []string, stdout, stderr
 			return writeError(stderr, err)
 		}
 		defer func() { _ = cache.Close() }()
-		providers, err := classify.Providers(cfg.Classifiers, os.LookupEnv, sessionLogger, nil)
+		keys, err := newSecretLookup()
+		if err != nil {
+			sessionLogger.Error("run failed", slog.String("error", err.Error()))
+			return writeError(stderr, err)
+		}
+		providers, err := classify.Providers(cfg.Classifiers, keys.get, sessionLogger, nil)
+		if keys.err != nil {
+			err = keys.err
+		}
 		if err != nil {
 			sessionLogger.Error("run failed", slog.String("error", err.Error()))
 			return writeError(stderr, err)

@@ -24,7 +24,10 @@ const maxConfigBytes = 1 << 20
 // that text.
 var errInvalidYAML = errors.New("config: invalid YAML")
 
-var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var (
+	envNamePattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	tenantIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+)
 
 // Config is the on-disk settings file. Credentials are references only.
 type Config struct {
@@ -74,6 +77,9 @@ type Profile struct {
 	PasswordEnv string `yaml:"password_env,omitempty"`
 	Email       string `yaml:"email,omitempty"`
 	Auth        string `yaml:"auth,omitempty"`
+	ClientID    string `yaml:"client_id,omitempty"`
+	Tenant      string `yaml:"tenant,omitempty"`
+	DeviceCode  bool   `yaml:"device_code,omitempty"`
 	CAFile      string `yaml:"ca_file,omitempty"`
 	CertSHA256  string `yaml:"cert_sha256,omitempty"`
 	Discover    bool   `yaml:"discover,omitempty"`
@@ -120,6 +126,9 @@ var profileFields = map[string]struct{}{
 	"password_env": {},
 	"email":        {},
 	"auth":         {},
+	"client_id":    {},
+	"tenant":       {},
+	"device_code":  {},
 	"ca_file":      {},
 	"cert_sha256":  {},
 	"discover":     {},
@@ -246,6 +255,12 @@ func validateProfiles(val *yaml.Node) error {
 				return checkChoice(keyNode, field, "password", "oauth_google", "oauth_microsoft")
 			case "password_env":
 				return checkEnvName(keyNode, field)
+			case "client_id":
+				return checkClientID(field)
+			case "tenant":
+				return checkTenant(field)
+			case "device_code":
+				return checkBool(keyNode, field)
 			case "cert_sha256":
 				return checkFingerprint(field)
 			case "discover":
@@ -471,6 +486,33 @@ func validateClassifiers(val *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+func checkClientID(val *yaml.Node) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode || strings.ContainsAny(val.Value, " \r\n") || len(val.Value) > 200 {
+		return fmt.Errorf("config: field \"client_id\" at line %d is invalid", val.Line)
+	}
+	return nil
+}
+
+func checkTenant(val *yaml.Node) error {
+	if isNull(val) || (val.Kind == yaml.ScalarNode && val.Value == "") {
+		return nil
+	}
+	if val.Kind != yaml.ScalarNode {
+		return fmt.Errorf("config: field \"tenant\" at line %d is invalid", val.Line)
+	}
+	switch val.Value {
+	case "common", "organizations", "consumers":
+		return nil
+	}
+	if tenantIDPattern.MatchString(val.Value) {
+		return nil
+	}
+	return fmt.Errorf("config: field \"tenant\" at line %d is invalid", val.Line)
 }
 
 func checkEnvName(keyNode, val *yaml.Node) error {

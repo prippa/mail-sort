@@ -45,8 +45,8 @@ Commands:
   undo --profile NAME [--run ID] [--uid UID]
 
 The mailbox password is read from the environment variable named by password_env.
-Jev reads TYPESAFE_API_KEY. Other classifiers read the variable named by key_env.
-OAuth is not implemented yet.
+Google and Microsoft sign in from the local page. A refresh token stays in the keyring.
+Jev reads TYPESAFE_API_KEY, then the keyring. Other classifiers read key_env, then the keyring.
 `
 
 func main() {

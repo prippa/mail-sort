@@ -16,6 +16,9 @@ document.addEventListener('alpine:init', function () {
       result: null,
       previewNote: '',
       connection: { folders: [] },
+      oauth: { status: '', url: '', user_code: '', verification_uri: '', error: '' },
+      oauthName: '',
+      poll: 0,
       pending: '',
       report: { rows: [], note_key: '' },
       runForm: {
@@ -104,8 +107,31 @@ document.addEventListener('alpine:init', function () {
       pickProvider: function (id) {
         this.draft = blankDraft()
         this.draft.provider = id
+        this.draft.use_password = !this.offersOAuth()
         this.step = 1
         this.connection = { folders: [] }
+      },
+
+      offersOAuth: function () {
+        var preset = this.selectedPreset()
+        if (!preset || !preset.auth) {
+          return false
+        }
+        return preset.auth.indexOf('oauth_google') !== -1 || preset.auth.indexOf('oauth_microsoft') !== -1
+      },
+
+      showPassword: function () {
+        return !this.offersOAuth() || !!this.draft.use_password
+      },
+
+      draftAuth: function () {
+        if (this.showPassword()) {
+          return 'password'
+        }
+        if (this.draft.provider === 'microsoft') {
+          return 'oauth_microsoft'
+        }
+        return 'oauth_google'
       },
 
       presetLabel: function (preset) {
@@ -166,8 +192,12 @@ document.addEventListener('alpine:init', function () {
           port: Number(this.draft.port) || 0,
           security: this.draft.security,
           username: this.draft.username,
-          password_env: this.draft.password_env,
+          password_env: this.showPassword() ? this.draft.password_env : '',
           email: this.draft.email,
+          auth: this.draftAuth(),
+          client_id: this.draft.client_id,
+          tenant: this.draft.provider === 'microsoft' ? this.draft.tenant : '',
+          device_code: this.draft.provider === 'microsoft' && !!this.draft.device_code,
           discover: !!this.draft.discover,
           max_chars: Number(this.draft.max_chars) || 0
         }
@@ -187,6 +217,79 @@ document.addEventListener('alpine:init', function () {
           this.copyBoot()
           this.connection = await this.api('POST', '/api/profiles/test', { name: this.draft.name })
           this.notice = this.text('accounts.connected')
+        })
+      },
+
+      signIn: async function () {
+        var self = this
+        await this.guard(async function () {
+          var data = await self.api('POST', '/api/oauth/start', self.profilePayload())
+          self.oauthName = self.draft.name
+          self.oauth = data
+          self.notice = self.text('oauth.waiting')
+          await self.load()
+          self.startPoll()
+        })
+      },
+
+      signInNamed: async function (name) {
+        var self = this
+        await this.guard(async function () {
+          var data = await self.api('POST', '/api/oauth/start', { name: name })
+          self.oauthName = name
+          self.oauth = data
+          self.notice = self.text('oauth.waiting')
+          await self.load()
+          self.startPoll()
+        })
+      },
+
+      startPoll: function () {
+        var self = this
+        if (this.poll) {
+          clearInterval(this.poll)
+        }
+        this.poll = setInterval(function () {
+          self.pollStatus()
+        }, 1500)
+      },
+
+      pollStatus: async function () {
+        if (!this.oauthName) {
+          return
+        }
+        try {
+          var data = await this.api('GET', '/api/oauth/status?profile=' + encodeURIComponent(this.oauthName))
+          this.oauth = data
+          if (data.status === 'done') {
+            clearInterval(this.poll)
+            this.poll = 0
+            this.notice = this.text('oauth.done')
+            this.error = ''
+            await this.load()
+          }
+          if (data.status === 'error') {
+            clearInterval(this.poll)
+            this.poll = 0
+            this.error = data.error || this.text('oauth.waiting')
+            this.notice = ''
+          }
+        } catch (err) {
+          this.error = err.message
+        }
+      },
+
+      saveKey: async function (item) {
+        var self = this
+        await this.guard(async function () {
+          await self.api('POST', '/api/classifiers/key', {
+            provider: item.provider,
+            key_env: item.key_env,
+            value: item.key_value || ''
+          })
+          item.key_value = ''
+          item.key_set = true
+          self.notice = self.text('classifier.key_saved')
         })
       },
 
@@ -507,7 +610,11 @@ function blankDraft() {
     port: '',
     security: '',
     discover: false,
-    max_chars: ''
+    max_chars: '',
+    client_id: '',
+    tenant: 'common',
+    device_code: false,
+    use_password: false
   }
 }
 

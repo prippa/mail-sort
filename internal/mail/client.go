@@ -42,17 +42,62 @@ type Session struct {
 }
 
 // Connect dials, upgrades TLS, and logs in with a password.
-// OAuth returns a PhaseError and does not open a connection.
+// An OAuth account is refused here, before a connection is opened.
 func (c *Client) Connect(ctx context.Context, account Account, password string) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if account.Auth != AuthPassword {
-		return nil, phaseError("5", "oauth is not implemented yet (phase 5)")
+		return nil, errors.New("imap: this account uses OAuth")
 	}
 	if account.Username == "" {
 		return nil, errors.New("imap: username is empty")
 	}
+	session, err := c.dial(ctx, account, password)
+	if err != nil {
+		return nil, err
+	}
+	if err := session.login(ctx, account.Username, password); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+// ConnectOAuth dials and authenticates with XOAUTH2. On an authentication
+// failure it refreshes the access token once and tries one new connection.
+func (c *Client) ConnectOAuth(ctx context.Context, account Account, src TokenSource) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if account.Auth != AuthOAuthGoogle && account.Auth != AuthOAuthMicrosoft {
+		return nil, errors.New("imap: this account uses a password")
+	}
+	if src == nil {
+		return nil, errors.New("oauth: this account is not signed in. Open the local page and sign in")
+	}
+	user := strings.TrimSpace(account.Email)
+	if user == "" {
+		user = strings.TrimSpace(account.Username)
+	}
+	if user == "" {
+		return nil, errors.New("imap: profile is missing an email")
+	}
+	token, err := src.AccessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	session, err := c.loginOAuth(ctx, account, user, token)
+	if err == nil || ctx.Err() != nil || !authFailed(err) {
+		return session, err
+	}
+	token, err = src.ForceRefresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.loginOAuth(ctx, account, user, token)
+}
+
+func (c *Client) dial(ctx context.Context, account Account, secret string) (*Session, error) {
 	if account.Endpoint.Host == "" || account.Endpoint.Port == 0 {
 		return nil, errors.New("imap: host is empty")
 	}
@@ -63,17 +108,22 @@ func (c *Client) Connect(ctx context.Context, account Account, password string) 
 	raw, err := dialRetry(ctx, account.Endpoint)
 	if err != nil {
 		release()
-		return nil, scrub(fmt.Errorf("imap: dial %s: %w", account.Endpoint.addr(), err), password)
+		return nil, scrub(fmt.Errorf("imap: dial %s: %w", account.Endpoint.addr(), err), secret)
 	}
-	session := &Session{
+	return &Session{
 		client:   raw,
 		release:  release,
-		password: password,
+		password: secret,
 		hint:     account.AuthFailureHint,
-	}
-	err = session.login(ctx, account.Username, password)
+	}, nil
+}
+
+func (c *Client) loginOAuth(ctx context.Context, account Account, user, token string) (*Session, error) {
+	session, err := c.dial(ctx, account, token)
 	if err != nil {
-		session.Close()
+		return nil, err
+	}
+	if err := session.xoauth2(ctx, user, token); err != nil {
 		return nil, err
 	}
 	return session, nil
@@ -89,9 +139,21 @@ func (c *Client) acquire(ctx context.Context) error {
 }
 
 func (s *Session) login(ctx context.Context, username, password string) error {
+	return s.waitAuth(ctx, func() error {
+		return s.client.Login(username, password).Wait()
+	})
+}
+
+func (s *Session) xoauth2(ctx context.Context, user, token string) error {
+	return s.waitAuth(ctx, func() error {
+		return s.client.Authenticate(&xoauth2Client{user: user, token: token})
+	})
+}
+
+func (s *Session) waitAuth(ctx context.Context, auth func() error) error {
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- s.client.Login(username, password).Wait()
+		errCh <- auth()
 	}()
 	select {
 	case <-ctx.Done():
@@ -103,12 +165,16 @@ func (s *Session) login(ctx context.Context, username, password string) error {
 			return nil
 		}
 		s.closeConn()
-		// The server text is dropped. A NO response can echo the password.
+		// The server text is dropped. A NO response can echo the secret.
 		if s.hint != "" {
 			return fmt.Errorf("imap: authentication failed. %s", s.hint)
 		}
 		return errors.New("imap: authentication failed")
 	}
+}
+
+func authFailed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "authentication failed")
 }
 
 // Close releases the connection slot. A second call does nothing.

@@ -136,7 +136,7 @@ classifiers:
     key_env: ANTHROPIC_API_KEY
 ```
 
-`auth` defaults to a password when `password_env` is set and the preset allows it. Gmail without `password_env` stays on OAuth, which is not implemented until phase 5. Microsoft accepts only `oauth_microsoft`. `discover: true` is used when `provider` is `custom` and `host` is empty. Lookup order is the ISP autoconfig URL, `/.well-known/autoconfig/mail/config-v1.1.xml`, then `https://autoconfig.thunderbird.net/v1.1/{domain}`, then RFC 6186 `_imaps._tcp`. The local part of the address is not sent. HTTP and host guessing are not used.
+`auth` defaults to a password when `password_env` is set and the preset allows it. Gmail without `password_env` uses `oauth_google`. Microsoft accepts only `oauth_microsoft`. Sign in from the local page. The refresh token stays in the keyring, or in the encrypted file when Secret Service is missing. `client_id`, `tenant`, and `device_code` are profile fields. A client id is not a secret. An empty `client_id` uses the id injected at build time. `discover: true` is used when `provider` is `custom` and `host` is empty. Lookup order is the ISP autoconfig URL, `/.well-known/autoconfig/mail/config-v1.1.xml`, then `https://autoconfig.thunderbird.net/v1.1/{domain}`, then RFC 6186 `_imaps._tcp`. The local part of the address is not sent. HTTP and host guessing are not used.
 
 `classifiers` is the enabled chain, in order. An empty list calls no provider. `key_env` is a variable name. `api_key` is rejected. Jev's base URL is the origin (`POST /v1/systemone`). An OpenAI-compatible base URL includes `/v1` (`POST /chat/completions`). Anthropic's base URL is the origin (`POST /v1/messages`). A missing or rejected key stops the chain. Category rubrics live in `categories.yaml` beside the config, or in `categories_file`.
 
@@ -148,7 +148,7 @@ classifiers:
 
 The keyring service name is `mailsorter`. Windows Credential Manager limits a secret to 2560 bytes (`go-keyring` documents this). Persist the refresh token only. Access tokens stay in memory. If Secret Service is missing on Linux, use an encrypted file (argon2id + XChaCha20-Poly1305) and require the master-password variable for headless runs.
 
-Do not add config keys whose names contain `password`, `secret`, `token`, or `bearer`, except `password_env`.
+Do not add config keys whose names contain `password`, `secret`, `token`, or `bearer`, except `password_env`. `client_secret` is rejected. A public PKCE client has no client secret.
 
 ## Dependencies
 
@@ -321,6 +321,7 @@ These stay `// VERIFY` until the cited source is read in the phase that implemen
 - AWS WorkMail regions beyond `us-east-1`, `us-west-2`, and `eu-west-1` on the AWS endpoints page.
 - Zoho personal IMAP hosts outside `imap.zoho.com` and `imappro.zoho.com`. The current IMAP guide says to paste the datacenter host from the account.
 - A live ISPDB domain document. The index `https://autoconfig.thunderbird.net/v1.1/` exists; `gmail.com` returned HTTP 500. Thunderbird's autoconfig page says it does not use DNS SRV; this program still tries RFC 6186 last.
-- Live-server `UID MOVE` and `UID EXPUNGE`. The in-memory server covers MOVE, and COPY plus STORE `\Deleted` plus UID EXPUNGE of one UID, including a second `\Deleted` message that must stay. A dynamic COPYUID has no numeric UID here; the fallback is a Message-ID search. `Authenticate(sasl.Client) error` is the pinned signature; XOAUTH2 is phase 5.
+- Live-server `UID MOVE` and `UID EXPUNGE`. The in-memory server covers MOVE, and COPY plus STORE `\Deleted` plus UID EXPUNGE of one UID, including a second `\Deleted` message that must stay. A dynamic COPYUID has no numeric UID here; the fallback is a Message-ID search. `Authenticate(sasl.Client) error` is the pinned signature. The XOAUTH2 initial response is tested against Microsoft's documented example. Live Gmail and Microsoft sign-in were not used.
+- Whether a Google Desktop client accepts an unregistered random `http://127.0.0.1` port, and whether Entra treats a registered `http://localhost` as matching `http://localhost:<port>`. If the provider reports a redirect mismatch, add the printed address and sign in again.
 - A live Jev, OpenAI, or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
 - Anthropic models that reject `tool_choice` type `tool` (the primer names Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1). The client retries a 400 without the force, then once without `strict`. That fallback was not verified against a live model.

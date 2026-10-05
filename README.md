@@ -1,6 +1,6 @@
 # MailSorter
 
-Cross-platform tool that files mail into folders. It can test an IMAP connection, classify one message, file a mailbox after a confirmed dry run, and open a local web page for password accounts.
+Cross-platform tool that files mail into folders. It can test an IMAP connection, classify one message, file a mailbox after a confirmed dry run, and open a local web page to set up an account.
 
 The spec, dependency pins, and provider notes are in [docs/SPEC.md](docs/SPEC.md). Safety rules are in [AGENTS.md](AGENTS.md).
 
@@ -19,6 +19,6 @@ make build
 ./dist/mailsorter-linux-amd64 undo --profile Work
 ```
 
-`test-conn` and `dev-clean` read `password_env` from the environment. `classify` reads `TYPESAFE_API_KEY` for Jev, or the variable named by `key_env` for another provider. OAuth is not implemented yet. With no `categories.yaml`, classify uses the starter list and does not call a provider until `classifiers` is set.
+`test-conn` and `dev-clean` read `password_env` from the environment for a password account. Google and Microsoft sign in from the local page; the refresh token stays on this computer. `classify` reads `TYPESAFE_API_KEY` for Jev, or the variable named by `key_env`, and then the key saved on this computer. With no `categories.yaml`, classify uses the starter list and does not call a provider until `classifiers` is set.
 
-Кратко: программа подключается к почте по IMAP, классифицирует письма и после подтверждения раскладывает их по папкам. Первый запуск профиля только показывает план. Пароль и ключ API задаются переменными окружения, а не файлом настроек. Команда без аргументов открывает страницу только на этом компьютере.
+Кратко: программа подключается к почте по IMAP, классифицирует письма и после подтверждения раскладывает их по папкам. Первый запуск профиля только показывает план. Пароль и ключ API задаются переменными окружения или хранятся на этом компьютере, а не в файле настроек. Google и Microsoft входят со страницы на этом компьютере. Команда без аргументов открывает эту страницу.
