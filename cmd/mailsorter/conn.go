@@ -31,7 +31,7 @@ func runTestConn(cfg config.Config, args []string, stdout, stderr io.Writer) int
 		}
 		return 2
 	}
-	return withSession(cfg, *name, stderr, func(ctx context.Context, session *mail.Session, account mail.Account, logger *slog.Logger) int {
+	return withSession(cfg, *name, stderr, 2*time.Minute, func(ctx context.Context, session *mail.Session, account mail.Account, logger *slog.Logger) int {
 		caps, err := session.Capabilities(ctx)
 		if err != nil {
 			return loggedError(logger, stderr, err)
@@ -82,7 +82,7 @@ func runDevClean(cfg config.Config, args []string, stdout, stderr io.Writer) int
 		}
 		return 2
 	}
-	return withSession(cfg, *name, stderr, func(ctx context.Context, session *mail.Session, _ mail.Account, logger *slog.Logger) int {
+	return withSession(cfg, *name, stderr, 2*time.Minute, func(ctx context.Context, session *mail.Session, _ mail.Account, logger *slog.Logger) int {
 		profile, err := findProfile(cfg, *name)
 		if err != nil {
 			return writeError(stderr, err)
@@ -108,7 +108,7 @@ func runDevClean(cfg config.Config, args []string, stdout, stderr io.Writer) int
 	})
 }
 
-func withSession(cfg config.Config, name string, stderr io.Writer, run func(context.Context, *mail.Session, mail.Account, *slog.Logger) int) int {
+func withSession(cfg config.Config, name string, stderr io.Writer, timeout time.Duration, run func(context.Context, *mail.Session, mail.Account, *slog.Logger) int) int {
 	profile, err := findProfile(cfg, name)
 	if err != nil {
 		return writeError(stderr, err)
@@ -122,7 +122,10 @@ func withSession(cfg config.Config, name string, stderr io.Writer, run func(cont
 	if err != nil {
 		return loggedError(logger, stderr, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if account.Discover {
 		found, err := mail.DiscoverIMAP(ctx, account.Email, mail.Discover{})

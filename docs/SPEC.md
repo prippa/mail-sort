@@ -70,8 +70,8 @@ Global flags come before the command. `--config` overrides the default path.
 | `dev-clean` | 1 | prints cleaned messages; does not move mail |
 | `classify` | 2 | classifies one message from stdin; does not move mail |
 | `categories export` | 2 | writes the starter category list as YAML |
-| `run` | 3 | not implemented |
-| `undo` | 3 | not implemented |
+| `run` | 3 | dry-run by default; `--confirm` stores the SQLite confirmation; `--apply` files that plan |
+| `undo` | 3 | moves a filed run back, or reports a copy left in place |
 | `watch` | 6 | not implemented |
 | `version` | 0 | prints the ldflags version, or `dev` |
 | `help` | 0 | usage |
@@ -251,19 +251,23 @@ The message is untrusted data inside a delimited block. The model has no tools. 
 
 Provider chain: ordered, each with its own thresholds. Default `[jev]`. Example: Jev at 0.80, then an LLM at 0.70, then `needs_review`. A provider error tries the next provider. If all fail, leave the message and retry next run. Never send mail to a provider the user has not enabled.
 
-Cache key: SHA-256 of normalized features, categories hash, and provider/model. Value: the decision, in SQLite. The classification cache is the `classification_cache` table in `mailsorter.db`. Run and undo tables come later.
+Cache key: SHA-256 of normalized features, categories hash, and provider/model. Value: the decision, in SQLite. The classification cache is the `classification_cache` table in `mailsorter.db`. Confirmation, runs, and undo rows are the other tables in that file.
 
 Before a remote call, card-like numbers (13–19 digits with single spaces or dashes), IBANs, and runs of 8 or more digits are redacted. Eight is a product choice; the spec does not set the length. Rules still see the unredacted text. Email and phone redaction stay off.
 
 ## Engine
 
-Source folders default to INBOX. Filters: unread only, since date, max N newest first, skip flagged, skip drafts. Classify with a worker pool (default 4) and rate limiting. IMAP mutations are serialized on one connection.
+Source folders default to INBOX. Filters: unread only, since date, max N newest first, skip flagged, skip drafts. Flagged messages and drafts are skipped unless `--include-flagged` or `--include-drafts` is set. Classify with a worker pool (default 4) and rate limiting. IMAP mutations are serialized on one connection.
 
-State: profile, mailbox, `UIDVALIDITY`, UID, `Message-ID`, decision, provider/model, confidence, applied flag, run id, destination UID, timestamps.
+`run` stores a dry run and does not move mail. `--override UID=category` edits that plan. `--confirm` writes the SQLite confirmation and still does not move mail. `--apply` files the stored plan and does not classify again. A new dry run replaces an unapplied one. A partial apply must be finished or undone before the next plan.
+
+State: profile, mailbox, `UIDVALIDITY`, UID, `Message-ID`, decision, provider/model, confidence, applied flag, run id, destination UID, timestamps. Subject and from are stored in the 0600 database so the dry run can be shown again. They are not written to the log.
 
 Dry run shows subject, from, predicted category, confidence, and provider. The user can override a row, then apply the selection.
 
-Safety: max moves per run default 200. Abort after 5 consecutive classifier errors.
+Safety: max moves per run default 200, counting copies as well. Rows past the cap stay pending. Abort after 5 consecutive classifier errors. A message already filed for the profile is not filed again; if `UIDVALIDITY` changes, the Message-ID is used.
+
+MOVE is sent only when the server advertises MOVE or IMAP4rev2. Otherwise UIDPLUS copies the message, marks that UID `\Deleted`, and UID EXPUNGEs that UID. Without MOVE and without UIDPLUS the move is refused; `--copy-only` copies and leaves the original. A label is always a copy. Undo moves a moved message back. Undo leaves a copy in place, because removing it would delete mail.
 
 Undo reverses a run or selected rows from the stored UIDs and reports what failed.
 
@@ -311,6 +315,6 @@ These stay `// VERIFY` until the cited source is read in the phase that implemen
 - AWS WorkMail regions beyond `us-east-1`, `us-west-2`, and `eu-west-1` on the AWS endpoints page.
 - Zoho personal IMAP hosts outside `imap.zoho.com` and `imappro.zoho.com`. The current IMAP guide says to paste the datacenter host from the account.
 - A live ISPDB domain document. The index `https://autoconfig.thunderbird.net/v1.1/` exists; `gmail.com` returned HTTP 500. Thunderbird's autoconfig page says it does not use DNS SRV; this program still tries RFC 6186 last.
-- `imapclient` `UID MOVE` and `UID EXPUNGE` behavior. `Authenticate(sasl.Client) error` is the pinned signature; XOAUTH2 is phase 5.
+- Live-server `UID MOVE` and `UID EXPUNGE`. The in-memory server covers MOVE, and COPY plus STORE `\Deleted` plus UID EXPUNGE of one UID, including a second `\Deleted` message that must stay. A dynamic COPYUID has no numeric UID here; the fallback is a Message-ID search. `Authenticate(sasl.Client) error` is the pinned signature; XOAUTH2 is phase 5.
 - A live Jev, OpenAI, or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
 - Anthropic models that reject `tool_choice` type `tool` (the primer names Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1). The client retries a 400 without the force, then once without `strict`. That fallback was not verified against a live model.

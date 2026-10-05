@@ -1,4 +1,4 @@
-// Package store will keep run state in SQLite via modernc.org/sqlite
-// (pure Go, pinned in docs/SPEC.md). The classification cache lives in
-// internal/classify. Run, apply, and undo tables are a later phase.
+// Package store keeps confirmation, dry-run, apply, and undo state in SQLite.
+// The classification cache lives in the same mailsorter.db file and is opened
+// by internal/classify. Both openers create their own tables.
 package store

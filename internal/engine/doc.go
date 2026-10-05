@@ -1,4 +1,4 @@
-// Package engine will plan, apply, undo, and watch mailbox changes.
-// The first run of a profile is a dry run. Apply never deletes mail and never
-// changes \Seen. Phase 0 has no engine yet.
+// Package engine plans a dry run, applies it after confirmation, and undoes
+// a filed run. Confirmation lives in SQLite. The first plan does not move mail.
+// Apply never deletes mail and never changes the read flag.
 package engine

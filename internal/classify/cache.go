@@ -50,7 +50,7 @@ func (m *Memory) Put(_ context.Context, key string, decision Decision) error {
 }
 
 // SQLite is the classification cache in the state directory.
-// Run and undo tables are a later phase.
+// Run and undo tables are created in the same file by internal/store.
 type SQLite struct {
 	db *sql.DB
 }
@@ -83,9 +83,18 @@ func OpenCache(ctx context.Context, path string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("classify: open cache: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	var mode string
+	if err := db.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&mode); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("classify: open cache: %w", err)
+	}
+	if mode != "wal" {
+		_ = db.Close()
+		return nil, errors.New("classify: open cache: journal mode")
+	}
+	if err := chmodDB(path); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	return &SQLite{db: db}, nil
 }
@@ -126,6 +135,25 @@ func (s *SQLite) Put(ctx context.Context, key string, decision Decision) error {
 		ON CONFLICT(cache_key) DO UPDATE SET decision = excluded.decision`, key, string(raw))
 	if err != nil {
 		return fmt.Errorf("classify: write cache: %w", err)
+	}
+	return nil
+}
+
+func chmodDB(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("classify: open cache: %w", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		extra := path + suffix
+		if _, err := os.Stat(extra); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("classify: open cache: %w", err)
+		}
+		if err := os.Chmod(extra, 0o600); err != nil {
+			return fmt.Errorf("classify: open cache: %w", err)
+		}
 	}
 	return nil
 }

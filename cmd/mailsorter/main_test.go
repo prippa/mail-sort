@@ -40,11 +40,11 @@ func TestHelp(t *testing.T) {
 
 func TestNotImplemented(t *testing.T) {
 	isolate(t)
-	_, stderr, code := runCmd(t, "run")
+	_, stderr, code := runCmd(t, "watch")
 	if code != 2 {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "run is not implemented yet (phase 3)") {
+	if !strings.Contains(stderr, "watch is not implemented yet (phase 6)") {
 		t.Fatalf("stderr=%q", stderr)
 	}
 }

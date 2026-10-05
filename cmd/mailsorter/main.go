@@ -24,9 +24,9 @@ Global flags come before the command.
 
 Commands:
   ui          open the local web UI (default; phase 4)
-  run         classify and file mail (phase 3)
+  run         dry-run, confirm, and file mail
   watch       watch a mailbox and file new mail (phase 6)
-  undo        reverse a run (phase 3)
+  undo        reverse a filed run
   test-conn   connect and show IMAP capabilities and folders
   dev-clean   print cleaned messages from one folder
   classify    classify one message from stdin
@@ -38,6 +38,11 @@ Commands:
   dev-clean --profile NAME [--folder INBOX] [--limit 5] [--max-chars N]
   classify --stdin [--max-chars N]
   categories export
+  run --profile NAME [--folder INBOX] [--limit 200]
+  run --profile NAME --confirm
+  run --profile NAME --override UID=category
+  run --profile NAME --apply [--copy-only]
+  undo --profile NAME [--run ID] [--uid UID]
 
 The mailbox password is read from the environment variable named by password_env.
 Jev reads TYPESAFE_API_KEY. Other classifiers read the variable named by key_env.
@@ -104,7 +109,19 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return writeError(stderr, err)
 		}
 		return runClassify(cfg, path, fs.Args()[1:], stdin, stdout, stderr)
-	case "ui", "run", "watch", "undo":
+	case "run":
+		cfg, path, err := loadConfig(*configPath)
+		if err != nil {
+			return writeError(stderr, err)
+		}
+		return runMail(cfg, path, fs.Args()[1:], stdout, stderr)
+	case "undo":
+		cfg, _, err := loadConfig(*configPath)
+		if err != nil {
+			return writeError(stderr, err)
+		}
+		return runUndo(cfg, fs.Args()[1:], stdout, stderr)
+	case "ui", "watch":
 		if _, _, err := loadConfig(*configPath); err != nil {
 			return writeError(stderr, err)
 		}
@@ -119,8 +136,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func notImplemented(cmd string, stderr io.Writer) int {
 	phase, ok := map[string]string{
-		"run":   "3",
-		"undo":  "3",
 		"ui":    "4",
 		"watch": "6",
 	}[cmd]

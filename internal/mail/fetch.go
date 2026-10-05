@@ -59,7 +59,7 @@ func (s *Session) ListFolders(ctx context.Context) ([]Folder, error) {
 	return folders, err
 }
 
-// CreateMailbox creates a mailbox. The CLI does not call this.
+// CreateMailbox creates a mailbox. Apply calls it through EnsureMailbox.
 func (s *Session) CreateMailbox(ctx context.Context, name string) error {
 	return s.do(ctx, func() error {
 		if err := s.client.Create(name, nil).Wait(); err != nil {
