@@ -122,6 +122,44 @@ func TestPartialApplyBlocksAnotherPlan(t *testing.T) {
 	}
 }
 
+func TestConsentForgetAndRecent(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t, filepath.Join(t.TempDir(), "mailsorter.db"))
+	ok, err := db.HasConsent(ctx, "abc")
+	if err != nil || ok {
+		t.Fatalf("consent = %v %v", ok, err)
+	}
+	if err := db.GrantConsent(ctx, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = db.HasConsent(ctx, "abc")
+	if err != nil || !ok {
+		t.Fatalf("consent = %v %v", ok, err)
+	}
+	id, err := db.CreateRun(ctx, Run{Profile: "Work", Mailbox: "INBOX", UIDValidity: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Confirm(ctx, "Work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ForgetProfile(ctx, "Work"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = db.Confirmed(ctx, "Work")
+	if err != nil || ok {
+		t.Fatalf("still confirmed %v %v", ok, err)
+	}
+	run, _, err := db.LoadRun(ctx, id)
+	if err != nil || run.Status != StatusSuperseded {
+		t.Fatalf("status %s err %v", run.Status, err)
+	}
+	recent, err := db.RecentRuns(ctx, 10)
+	if err != nil || len(recent) != 1 || recent[0].ID != id {
+		t.Fatalf("%+v %v", recent, err)
+	}
+}
+
 func openDB(t *testing.T, path string) *DB {
 	t.Helper()
 	db, err := Open(context.Background(), path)

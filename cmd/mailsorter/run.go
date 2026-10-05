@@ -284,7 +284,7 @@ func runMail(cfg config.Config, configPath string, args []string, stdout, stderr
 			return writeError(stderr, err)
 		}
 		started := time.Now()
-		report, err := engine.Plan(ctx, session, chain{set: set, providers: providers, cache: cache}, db, engine.PlanOptions{
+		report, err := engine.Plan(ctx, session, chain{set: set, providers: providers, cache: cache, privacy: cfg.Privacy}, db, engine.PlanOptions{
 			Profile: *profile,
 			Mailbox: *folder,
 			Workers: *workers,
@@ -382,10 +382,11 @@ type chain struct {
 	set       classify.Set
 	providers []classify.Provider
 	cache     classify.Cache
+	privacy   config.Privacy
 }
 
 func (c chain) Classify(ctx context.Context, in classify.Input) (classify.Decision, error) {
-	return classify.Classify(ctx, in, c.set, c.providers, c.cache)
+	return classify.Classify(classify.WithPrivacy(ctx, c.privacy), in, c.set, c.providers, c.cache)
 }
 
 func openState() (*store.DB, error) {

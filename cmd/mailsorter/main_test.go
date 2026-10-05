@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,10 +53,59 @@ func TestNotImplemented(t *testing.T) {
 
 func TestDefaultCommandIsUI(t *testing.T) {
 	isolate(t)
-	_, stderr, code := runCmd(t)
-	if code != 2 || !strings.Contains(stderr, "ui is not implemented yet (phase 4)") {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
+	ctx, cancel := context.WithCancel(context.Background())
+	origCtx := newUIContext
+	origBrowser := launchBrowser
+	newUIContext = func() (context.Context, context.CancelFunc) { return ctx, func() {} }
+	launchBrowser = false
+	t.Cleanup(func() {
+		newUIContext = origCtx
+		launchBrowser = origBrowser
+		cancel()
+	})
+	var buf safeBuf
+	done := make(chan int, 1)
+	go func() {
+		done <- run(nil, strings.NewReader(""), &buf, io.Discard)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	text := ""
+	for time.Now().Before(deadline) {
+		text = buf.String()
+		if strings.Contains(text, "http://127.0.0.1:") && strings.Contains(text, "/#") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 || !strings.Contains(text, "http://127.0.0.1:") {
+			t.Fatalf("code=%d stdout=%q", code, text)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ui did not stop")
+	}
+	if strings.Contains(text, "not implemented") {
+		t.Fatalf("stdout=%q", text)
+	}
+}
+
+type safeBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *safeBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *safeBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func TestUnknownCommand(t *testing.T) {

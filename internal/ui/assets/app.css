@@ -1,0 +1,140 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #5c564c;
+  --line: #ddd6c8;
+  --paper: #f6f3ec;
+  --card: #fffdf8;
+  --accent: #0f6b4c;
+  --accent-ink: #ffffff;
+  --warn: #8f2d2d;
+  --ok: #0f6b4c;
+}
+
+* { box-sizing: border-box; }
+
+[x-cloak] { display: none !important; }
+
+body {
+  margin: 0;
+  font: 16px/1.45 system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+header, main { width: min(960px, calc(100% - 24px)); margin: 0 auto; }
+
+header { padding: 20px 0 8px; }
+
+h1 { font-size: 1.4rem; margin: 0 0 12px; }
+
+h2 { font-size: 1.15rem; margin: 0 0 12px; }
+
+nav { display: flex; flex-wrap: wrap; gap: 8px; }
+
+button, .nav {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+button.primary, .nav.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+button:disabled { opacity: 0.55; cursor: default; }
+
+.banner {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff4f2;
+  color: var(--warn);
+}
+
+.note {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #e7f5ee;
+  color: var(--ok);
+}
+
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0 24px;
+}
+
+label { display: block; margin: 10px 0; }
+
+label span, .hint { color: var(--muted); font-size: 0.92rem; }
+
+input, select, textarea {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+textarea { min-height: 8rem; }
+
+.check { display: flex; gap: 8px; align-items: center; }
+
+.check input { width: auto; }
+
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+
+.grid { display: grid; gap: 8px; }
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 8px 0;
+}
+
+pre, .value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  font: 0.92rem/1.4 ui-monospace, monospace;
+}
+
+table { width: 100%; border-collapse: collapse; }
+
+th, td {
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 6px;
+}
+
+.dialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 25, 21, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.dialog section { width: min(560px, 100%); margin: 0; }
+
+@media (max-width: 700px) {
+  table, thead, tbody, tr, th, td { display: block; }
+  thead { display: none; }
+  tr { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 8px; }
+}

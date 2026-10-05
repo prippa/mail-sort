@@ -122,7 +122,7 @@ func runClassify(cfg config.Config, configPath string, args []string, stdin io.R
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	decision, err := classify.Classify(ctx, input, set, providers, cache)
+	decision, err := classify.Classify(classify.WithPrivacy(ctx, cfg.Privacy), input, set, providers, cache)
 	if err != nil {
 		logger.Error("classify failed", slog.String("error", err.Error()))
 		return writeError(stderr, err)

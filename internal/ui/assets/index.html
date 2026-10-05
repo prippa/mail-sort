@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MailSorter</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body x-data="mailsorter" x-cloak x-init="init()">
+<header>
+  <h1>MailSorter</h1>
+  <p x-show="!token">Open the address printed by MailSorter. Откройте адрес, который напечатала программа.</p>
+  <nav x-show="token && boot">
+    <button type="button" class="nav" x-bind:class="screen === 'wizard' ? 'on' : ''" x-on:click="go('wizard')" x-text="text('nav.wizard')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'accounts' ? 'on' : ''" x-on:click="go('accounts')" x-text="text('nav.accounts')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'categories' ? 'on' : ''" x-on:click="go('categories')" x-text="text('nav.categories')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'classifier' ? 'on' : ''" x-on:click="go('classifier')" x-text="text('nav.classifier')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'run' ? 'on' : ''" x-on:click="openRun()" x-text="text('nav.run')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'automation' ? 'on' : ''" x-on:click="go('automation')" x-text="text('nav.automation')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'activity' ? 'on' : ''" x-on:click="openActivity()" x-text="text('nav.activity')"></button>
+    <button type="button" class="nav" x-bind:class="screen === 'settings' ? 'on' : ''" x-on:click="go('settings')" x-text="text('nav.settings')"></button>
+  </nav>
+</header>
+<main x-show="token && boot">
+  <p class="banner" x-show="error" x-text="error"></p>
+  <p class="note" x-show="notice" x-text="notice"></p>
+
+  <section x-show="screen === 'wizard'">
+    <h2 x-text="text('nav.wizard')"></h2>
+    <div x-show="step === 0">
+      <h3 x-text="text('wizard.provider')"></h3>
+      <template x-for="preset in boot.presets" x-bind:key="preset.id">
+        <button type="button" x-on:click="pickProvider(preset.id)" x-text="presetLabel(preset)"></button>
+      </template>
+    </div>
+    <div x-show="step === 1">
+      <h3 x-text="text('wizard.account')"></h3>
+      <p class="hint" x-show="!canUsePassword()" x-text="text('accounts.oauth_later')"></p>
+      <div x-show="canUsePassword()">
+        <p class="hint" x-text="text('guide.password')"></p>
+        <label><span x-text="text('wizard.name')"></span><input x-model="draft.name" autocomplete="off"></label>
+        <label><span x-text="text('wizard.username')"></span><input x-model="draft.username" autocomplete="off"></label>
+        <label><span x-text="text('wizard.email')"></span><input x-model="draft.email" autocomplete="off"></label>
+        <label><span x-text="text('accounts.password_env')"></span><input x-model="draft.password_env" autocomplete="off"></label>
+        <label x-show="needsHost()"><span x-text="text('wizard.host')"></span><input x-model="draft.host" autocomplete="off"></label>
+        <label x-show="needsHost()"><span x-text="text('wizard.port')"></span><input x-model="draft.port" inputmode="numeric" autocomplete="off"></label>
+        <label x-show="needsHost()"><span x-text="text('wizard.security')"></span>
+          <select x-model="draft.security">
+            <option value="">implicit_tls</option>
+            <option value="implicit_tls">implicit_tls</option>
+            <option value="starttls">starttls</option>
+          </select>
+        </label>
+        <label x-show="hostChoices().length > 1"><span x-text="text('wizard.host_id')"></span>
+          <select x-model="draft.host_id">
+            <template x-for="host in hostChoices()" x-bind:key="host.id">
+              <option x-bind:value="host.id" x-text="hostLabel(host)"></option>
+            </template>
+          </select>
+        </label>
+        <label class="check" x-show="draft.provider === 'custom'"><input type="checkbox" x-model="draft.discover"><span x-text="text('wizard.discover')"></span></label>
+        <p class="hint" x-show="presetNote()" x-text="presetNote()"></p>
+        <div class="row">
+          <button type="button" class="primary" x-on:click="saveAccount()" x-text="text('action.save')"></button>
+          <button type="button" x-on:click="testAccount()" x-text="text('accounts.test')"></button>
+        </div>
+        <div x-show="connection && connection.host">
+          <p x-text="connectionSummary()"></p>
+          <template x-for="folder in connection.folders" x-bind:key="folder.name">
+            <p x-text="folder.name"></p>
+          </template>
+        </div>
+      </div>
+      <div class="row">
+        <button type="button" x-on:click="step = 0" x-text="text('action.back')"></button>
+        <button type="button" x-on:click="step = 2" x-bind:disabled="boot.profiles.length === 0" x-text="text('action.next')"></button>
+      </div>
+    </div>
+    <div x-show="step === 2">
+      <h3 x-text="text('wizard.categories')"></h3>
+      <button type="button" class="primary" x-on:click="useStarter()" x-text="text('wizard.use_starter')"></button>
+      <div class="row">
+        <button type="button" x-on:click="step = 1" x-text="text('action.back')"></button>
+        <button type="button" x-on:click="step = 3" x-text="text('action.next')"></button>
+      </div>
+    </div>
+    <div x-show="step === 3">
+      <h3 x-text="text('wizard.classifier')"></h3>
+      <p class="hint" x-text="text('classifier.confidence_note')"></p>
+      <button type="button" x-on:click="addClassifier('jev')" x-text="text('classifier.add')"></button>
+      <div class="row">
+        <button type="button" x-on:click="step = 2" x-text="text('action.back')"></button>
+        <button type="button" class="primary" x-on:click="finishWizard()" x-text="text('action.next')"></button>
+      </div>
+    </div>
+  </section>
+
+  <section x-show="screen === 'accounts'">
+    <h2 x-text="text('accounts.title')"></h2>
+    <p x-show="boot.profiles.length === 0" x-text="text('accounts.empty')"></p>
+    <template x-for="profile in boot.profiles" x-bind:key="profile.name">
+      <article class="card">
+        <strong x-text="profile.name"></strong>
+        <p x-text="profile.provider + ' ' + profile.username"></p>
+        <p x-text="profile.password_env"></p>
+        <p x-show="profile.password_set" x-text="text('accounts.password_set')"></p>
+        <p x-show="!profile.password_set" x-text="text('accounts.password_missing')"></p>
+        <p x-show="profile.confirmed" x-text="text('accounts.confirmed')"></p>
+        <p x-show="!profile.confirmed" x-text="text('accounts.not_confirmed')"></p>
+        <div class="row">
+          <button type="button" x-on:click="testNamed(profile.name)" x-text="text('accounts.test')"></button>
+          <button type="button" x-on:click="removeAccount(profile.name)" x-text="text('accounts.delete')"></button>
+        </div>
+      </article>
+    </template>
+    <h3 x-text="text('guide.google.title')"></h3>
+    <p class="value" x-text="text('guide.google.body')"></p>
+    <h3 x-text="text('guide.microsoft.title')"></h3>
+    <p class="value" x-text="text('guide.microsoft.body')"></p>
+    <h3 x-text="text('accounts.notes')"></h3>
+    <template x-for="preset in boot.presets" x-bind:key="preset.id">
+      <article class="card" x-show="preset.note">
+        <strong x-text="preset.name"></strong>
+        <p class="value" x-text="preset.note"></p>
+        <p class="hint" x-text="preset.username_hint"></p>
+        <p class="hint" x-show="preset.source" x-text="text('accounts.source') + ': ' + preset.source"></p>
+      </article>
+    </template>
+    <button type="button" x-on:click="go('wizard')" x-text="text('accounts.add')"></button>
+  </section>
+
+  <section x-show="screen === 'categories'">
+    <h2 x-text="text('nav.categories')"></h2>
+    <template x-for="cat in categories" x-bind:key="cat.key">
+      <article class="card">
+        <p x-show="cat.reserved" x-text="cat.key"></p>
+        <div x-show="!cat.reserved">
+          <label><span>key</span><input x-model="cat.key" autocomplete="off"></label>
+          <label><span>name</span><input x-model="cat.name" autocomplete="off"></label>
+          <label><span>name_ru</span><input x-model="cat.name_ru" autocomplete="off"></label>
+          <label><span>description</span><textarea x-model="cat.description"></textarea></label>
+          <label><span>folder</span><input x-model="cat.folder" autocomplete="off"></label>
+          <label><span x-text="text('run.action')"></span>
+            <select x-model="cat.action">
+              <option value="move">move</option>
+              <option value="label">label</option>
+              <option value="none">none</option>
+            </select>
+          </label>
+          <button type="button" x-on:click="removeCategory(cat)" x-text="text('action.delete')"></button>
+        </div>
+      </article>
+    </template>
+    <div class="row">
+      <button type="button" x-on:click="addCategory()" x-text="text('accounts.add')"></button>
+      <button type="button" x-on:click="useStarter()" x-text="text('wizard.use_starter')"></button>
+      <button type="button" class="primary" x-on:click="saveCategories()" x-text="text('action.save')"></button>
+    </div>
+    <template x-for="rule in rules" x-bind:key="rule.subject + rule.from + rule.category">
+      <p class="hint" x-text="ruleLine(rule)"></p>
+    </template>
+  </section>
+
+  <section x-show="screen === 'classifier'">
+    <h2 x-text="text('classifier.title')"></h2>
+    <p class="hint" x-text="text('classifier.confidence_note')"></p>
+    <p class="hint" x-text="text('classifier.local_hint')"></p>
+    <p class="hint" x-text="text('classifier.jev_alias')"></p>
+    <p x-show="classifiers.length === 0" x-text="text('classifier.empty')"></p>
+    <template x-for="item in classifiers" x-bind:key="item._id">
+      <article class="card">
+        <label><span x-text="text('classifier.provider')"></span>
+          <select x-model="item.provider">
+            <option value="jev">jev</option>
+            <option value="openai_compatible">openai_compatible</option>
+            <option value="anthropic">anthropic</option>
+          </select>
+        </label>
+        <label><span x-text="text('classifier.model')"></span><input x-model="item.model" autocomplete="off"></label>
+        <label><span x-text="text('classifier.base_url')"></span><input x-model="item.base_url" autocomplete="off"></label>
+        <label><span x-text="text('classifier.key_env')"></span><input x-model="item.key_env" autocomplete="off"></label>
+        <p x-show="item.key_set" x-text="text('classifier.key_set')"></p>
+        <p x-show="!item.key_set" x-text="text('classifier.key_missing')"></p>
+        <label><span x-text="text('classifier.min_confidence')"></span><input x-model="item.min_confidence" inputmode="decimal" autocomplete="off"></label>
+        <label><span x-text="text('classifier.price_input')"></span><input x-model="item.price_input" inputmode="decimal" autocomplete="off"></label>
+        <label><span x-text="text('classifier.price_output')"></span><input x-model="item.price_output" inputmode="decimal" autocomplete="off"></label>
+        <button type="button" x-on:click="removeClassifier(item)" x-text="text('classifier.remove')"></button>
+      </article>
+    </template>
+    <div class="row">
+      <button type="button" x-on:click="addClassifier('jev')" x-text="text('classifier.add')"></button>
+      <button type="button" class="primary" x-on:click="saveClassifiers()" x-text="text('action.save')"></button>
+    </div>
+    <h3 x-text="text('classifier.try')"></h3>
+    <label><span x-text="text('try.from')"></span><input x-model="sample.from" autocomplete="off"></label>
+    <label><span x-text="text('try.to')"></span><input x-model="sample.to" autocomplete="off"></label>
+    <label><span x-text="text('try.subject')"></span><input x-model="sample.subject" autocomplete="off"></label>
+    <label><span x-text="text('try.body')"></span><textarea x-model="sample.body"></textarea></label>
+    <div class="row">
+      <button type="button" x-on:click="showFields()" x-text="text('classifier.show_fields')"></button>
+      <button type="button" class="primary" x-on:click="classifySample()" x-text="text('classifier.classify')"></button>
+    </div>
+    <p class="hint" x-show="previewNote" x-text="previewNote"></p>
+    <template x-for="field in fields" x-bind:key="field.key">
+      <article class="card">
+        <strong x-text="field.key"></strong>
+        <pre x-text="field.value"></pre>
+      </article>
+    </template>
+    <article class="card" x-show="result">
+      <h3 x-text="text('try.result')"></h3>
+      <p x-text="resultLine()"></p>
+    </article>
+  </section>
+
+  <section x-show="screen === 'run'">
+    <h2 x-text="text('run.title')"></h2>
+    <label><span x-text="text('run.profile')"></span>
+      <select x-model="runForm.profile">
+        <template x-for="profile in boot.profiles" x-bind:key="profile.name">
+          <option x-bind:value="profile.name" x-text="profile.name"></option>
+        </template>
+      </select>
+    </label>
+    <label><span x-text="text('run.folder')"></span><input x-model="runForm.folder" autocomplete="off"></label>
+    <label><span x-text="text('run.limit')"></span><input x-model="runForm.limit" inputmode="numeric" autocomplete="off"></label>
+    <label><span x-text="text('run.since')"></span><input x-model="runForm.since" placeholder="YYYY-MM-DD" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" x-model="runForm.unread"><span x-text="text('run.unread')"></span></label>
+    <label class="check"><input type="checkbox" x-model="runForm.include_flagged"><span x-text="text('run.flagged')"></span></label>
+    <label class="check"><input type="checkbox" x-model="runForm.include_drafts"><span x-text="text('run.drafts')"></span></label>
+    <label class="check"><input type="checkbox" x-model="runForm.copy_only"><span x-text="text('run.copy_only')"></span></label>
+    <div class="row">
+      <button type="button" class="primary" x-on:click="plan()" x-text="text('run.plan')"></button>
+      <button type="button" x-on:click="confirmRun()" x-text="text('run.confirm')"></button>
+      <button type="button" x-on:click="applyRun()" x-text="text('run.apply')"></button>
+      <button type="button" x-on:click="undoRun()" x-text="text('run.undo')"></button>
+    </div>
+    <p x-show="report.note_key" x-text="text(report.note_key)"></p>
+    <table x-show="report.rows && report.rows.length">
+      <thead>
+        <tr>
+          <th x-text="text('run.uid')"></th>
+          <th x-text="text('run.from')"></th>
+          <th x-text="text('run.subject')"></th>
+          <th x-text="text('run.category')"></th>
+          <th x-text="text('run.action')"></th>
+          <th x-text="text('run.status')"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in report.rows" x-bind:key="row.uid">
+          <tr>
+            <td x-text="row.uid"></td>
+            <td x-text="row.from"></td>
+            <td x-text="row.subject"></td>
+            <td x-text="row.category"></td>
+            <td x-text="row.action + ' ' + row.folder"></td>
+            <td x-text="row.status"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <div class="row">
+      <label><span x-text="text('run.uid')"></span><input x-model="overrideUID" inputmode="numeric" autocomplete="off"></label>
+      <label><span x-text="text('run.category')"></span>
+        <select x-model="overrideCategory">
+          <template x-for="cat in boot.categories" x-bind:key="cat.key">
+            <option x-bind:value="cat.key" x-text="cat.name"></option>
+          </template>
+        </select>
+      </label>
+      <button type="button" x-on:click="overrideRow()" x-text="text('run.override')"></button>
+    </div>
+  </section>
+
+  <section x-show="screen === 'automation'">
+    <h2 x-text="text('automation.title')"></h2>
+    <p x-text="text('automation.body')"></p>
+  </section>
+
+  <section x-show="screen === 'activity'">
+    <h2 x-text="text('activity.title')"></h2>
+    <p x-show="!activity.runs || activity.runs.length === 0" x-text="text('activity.empty')"></p>
+    <template x-for="run in activity.runs" x-bind:key="run.id">
+      <article class="card">
+        <p x-text="activityLine(run)"></p>
+      </article>
+    </template>
+  </section>
+
+  <section x-show="screen === 'settings'">
+    <h2 x-text="text('settings.title')"></h2>
+    <label><span x-text="text('settings.language')"></span>
+      <select x-model="settings.language">
+        <option value="auto" x-text="text('settings.language_auto')"></option>
+        <option value="en">English</option>
+        <option value="ru">Русский</option>
+      </select>
+    </label>
+    <h3 x-text="text('settings.privacy')"></h3>
+    <p class="hint" x-text="text('settings.redaction')"></p>
+    <p class="hint" x-text="text('settings.body_chars')"></p>
+    <label class="check"><input type="checkbox" x-model="settings.privacy.redact_email"><span x-text="text('settings.redact_email')"></span></label>
+    <label class="check"><input type="checkbox" x-model="settings.privacy.redact_phone"><span x-text="text('settings.redact_phone')"></span></label>
+    <label class="check"><input type="checkbox" x-model="settings.privacy.subject_only"><span x-text="text('settings.subject_only')"></span></label>
+    <label class="check"><input type="checkbox" x-model="settings.privacy.rules_only"><span x-text="text('settings.rules_only')"></span></label>
+    <label class="check"><input type="checkbox" x-model="settings.privacy.local_only"><span x-text="text('settings.local_only')"></span></label>
+    <button type="button" class="primary" x-on:click="saveSettings()" x-text="text('action.save')"></button>
+    <p><span x-text="text('settings.config_path')"></span></p>
+    <p class="value" x-text="boot.config_path"></p>
+    <p><span x-text="text('settings.state_dir')"></span></p>
+    <p class="value" x-text="boot.state_dir"></p>
+  </section>
+</main>
+
+<div class="dialog" x-show="consentOpen">
+  <section>
+    <h2 x-text="text('consent.title')"></h2>
+    <p x-text="text('consent.body')"></p>
+    <p x-text="text('consent.fields')"></p>
+    <template x-for="item in boot.classifiers" x-bind:key="item.provider + item.base_url">
+      <p x-text="item.provider + ' ' + item.base_url"></p>
+    </template>
+    <div class="row">
+      <button type="button" class="primary" x-on:click="acceptConsent()" x-text="text('consent.accept')"></button>
+      <button type="button" x-on:click="consentOpen = false" x-text="text('action.close')"></button>
+    </div>
+  </section>
+</div>
+<script src="/assets/app.js" defer></script>
+<script src="/assets/alpine.min.js" defer></script>
+</body>
+</html>

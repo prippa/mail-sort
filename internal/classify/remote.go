@@ -681,6 +681,9 @@ func postJSON(ctx context.Context, opts providerOpts, endpoint string, header ht
 	if err := sameHost(endpoint, opts.baseURL); err != nil {
 		return nil, err
 	}
+	if PrivacyFrom(ctx).LocalOnly && !LoopbackBase(opts.baseURL) {
+		return nil, errors.New("classify: local-only allows a loopback classifier only")
+	}
 	var last error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := opts.limit.Wait(ctx); err != nil {

@@ -225,7 +225,11 @@ CREATE TABLE IF NOT EXISTS applied_messages (
 );
 CREATE INDEX IF NOT EXISTS runs_profile ON runs (profile, status, id);
 CREATE INDEX IF NOT EXISTS run_rows_run ON run_rows (run_id, id);
-CREATE INDEX IF NOT EXISTS applied_msgid ON applied_messages (profile, mailbox, message_id)`,
+CREATE INDEX IF NOT EXISTS applied_msgid ON applied_messages (profile, mailbox, message_id);
+CREATE TABLE IF NOT EXISTS classification_consent (
+	id TEXT PRIMARY KEY,
+	consented_at TEXT NOT NULL
+)`,
 	}
 	for _, statement := range statements {
 		for _, part := range strings.Split(statement, ";") {
@@ -286,6 +290,104 @@ func (db *DB) Confirm(ctx context.Context, profile string) error {
 		return fmt.Errorf("store: write confirmation: %w", err)
 	}
 	return nil
+}
+
+// HasConsent reports whether this remote-classifier fingerprint was accepted.
+func (db *DB) HasConsent(ctx context.Context, id string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if id == "" {
+		return false, nil
+	}
+	var n int
+	err := db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM classification_consent WHERE id = ?`, id).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("store: read consent: %w", err)
+	}
+	return n > 0, nil
+}
+
+// GrantConsent records that the user accepted this remote-classifier fingerprint.
+func (db *DB) GrantConsent(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id == "" {
+		return errors.New("store: consent id is empty")
+	}
+	_, err := db.db.ExecContext(ctx, `INSERT INTO classification_consent (id, consented_at) VALUES (?, ?)
+		ON CONFLICT(id) DO UPDATE SET consented_at = excluded.consented_at`, id, now())
+	if err != nil {
+		return fmt.Errorf("store: write consent: %w", err)
+	}
+	return nil
+}
+
+// ForgetProfile drops confirmation and an unapplied dry run.
+// A partial apply must be finished or undone first.
+func (db *DB) ForgetProfile(ctx context.Context, profile string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if profile == "" {
+		return errors.New("store: profile is empty")
+	}
+	tx, err := db.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: forget profile: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var partial int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE profile = ? AND status = ?`, profile, StatusPartial).Scan(&partial); err != nil {
+		return fmt.Errorf("store: forget profile: %w", err)
+	}
+	if partial > 0 {
+		return ErrApplyInProgress
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM profile_confirmation WHERE profile = ?`, profile); err != nil {
+		return fmt.Errorf("store: forget profile: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE runs SET status = ? WHERE profile = ? AND status = ?`, StatusSuperseded, profile, StatusDry); err != nil {
+		return fmt.Errorf("store: forget profile: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: forget profile: %w", err)
+	}
+	return nil
+}
+
+// RecentRuns returns the newest runs, without message rows.
+func (db *DB) RecentRuns(ctx context.Context, limit int) ([]Run, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	rows, err := db.db.QueryContext(ctx, `SELECT `+runColumns+` FROM runs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: read run: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Run
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read run: %w", err)
+	}
+	if out == nil {
+		out = []Run{}
+	}
+	return out, nil
 }
 
 // Applied reports whether this message was already filed for the profile.
@@ -590,6 +692,45 @@ func (db *DB) FinishUndo(ctx context.Context, runID int64) (string, error) {
 		return "", fmt.Errorf("store: write run: %w", err)
 	}
 	return status, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRun(row rowScanner) (Run, error) {
+	var run Run
+	var validity, hasCost int64
+	var created, applied, undone string
+	err := row.Scan(
+		&run.ID, &run.Profile, &run.Mailbox, &validity, &run.Status, &created, &applied, &undone,
+		&run.Moves, &run.Copies, &run.Errors, &run.APICalls, &run.TokensIn, &run.TokensOut, &run.CostUSD, &hasCost,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, ErrNotFound
+	}
+	if err != nil {
+		return Run{}, fmt.Errorf("store: read run: %w", err)
+	}
+	value, err := u32(validity)
+	if err != nil {
+		return Run{}, err
+	}
+	run.UIDValidity = value
+	run.HasCost = hasCost != 0
+	run.CreatedAt, err = parseTime(created)
+	if err != nil {
+		return Run{}, err
+	}
+	run.AppliedAt, err = parseTime(applied)
+	if err != nil {
+		return Run{}, err
+	}
+	run.UndoneAt, err = parseTime(undone)
+	if err != nil {
+		return Run{}, err
+	}
+	return run, nil
 }
 
 func (db *DB) oneRun(ctx context.Context, query string, args ...any) (Run, error) {

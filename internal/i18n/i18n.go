@@ -58,6 +58,18 @@ var catalog = map[Lang]map[string]string{
 	},
 }
 
+// Catalog is a copy of the display strings for lang.
+func Catalog(lang Lang) map[string]string {
+	out := make(map[string]string, len(catalog[EN]))
+	for key, english := range catalog[EN] {
+		out[key] = english
+		if value, ok := lookup(lang, key); ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 // T returns the string for key. A missing translation falls back to English,
 // then to the key itself so a gap is visible in the UI.
 func T(lang Lang, key string) string {

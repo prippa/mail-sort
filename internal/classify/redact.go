@@ -5,25 +5,43 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/prippa/mail-sort/internal/config"
 )
 
 const redactedText = "[redacted]"
 
 // digitRunMin is a product choice. The spec says to mask long digit runs and
 // does not set the length. Eight digits also covers many phone numbers.
-// Email and phone redaction stay off until a later setting turns them on.
+// Email and phone masking wait for the privacy switches.
 const digitRunMin = 8
 
 var (
-	cardPattern = regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`)
-	ibanPattern = regexp.MustCompile(`(?i)\b[A-Z]{2}\d{2}[A-Z0-9 ]{11,48}`)
-	digitRun    = regexp.MustCompile(`\d{` + strconv.Itoa(digitRunMin) + `,}`)
+	cardPattern  = regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`)
+	ibanPattern  = regexp.MustCompile(`(?i)\b[A-Z]{2}\d{2}[A-Z0-9 ]{11,48}`)
+	digitRun     = regexp.MustCompile(`\d{` + strconv.Itoa(digitRunMin) + `,}`)
+	emailPattern = regexp.MustCompile(`(?i)[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}`)
+	phoneIntl    = regexp.MustCompile(`\+\d{1,3}(?:[\s().-]*\d){8,14}`)
+	phoneParen   = regexp.MustCompile(`\(\d{3}\)[\s.-]*\d{3}[\s.-]*\d{4}`)
+	phoneSpaced  = regexp.MustCompile(`\b\d{3}[\s.-]\d{3}[\s.-]\d{4}\b`)
 )
 
 // Redact masks card-like numbers, IBANs, and long digit runs.
 func Redact(text string) string {
+	return redact(text, config.Privacy{})
+}
+
+func redact(text string, priv config.Privacy) string {
 	text = replaceIBANs(text)
 	text = replaceCards(text)
+	if priv.RedactEmail {
+		text = emailPattern.ReplaceAllString(text, redactedText)
+	}
+	if priv.RedactPhone {
+		text = phoneIntl.ReplaceAllString(text, redactedText)
+		text = phoneParen.ReplaceAllString(text, redactedText)
+		text = phoneSpaced.ReplaceAllString(text, redactedText)
+	}
 	return digitRun.ReplaceAllString(text, redactedText)
 }
 

@@ -28,44 +28,56 @@ var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Config is the on-disk settings file. Credentials are references only.
 type Config struct {
-	Language       string       `yaml:"language"`
-	Profiles       []Profile    `yaml:"profiles"`
-	CategoriesFile string       `yaml:"categories_file"`
-	Classifiers    []Classifier `yaml:"classifiers"`
+	Language       string       `yaml:"language,omitempty"`
+	Profiles       []Profile    `yaml:"profiles,omitempty"`
+	CategoriesFile string       `yaml:"categories_file,omitempty"`
+	Classifiers    []Classifier `yaml:"classifiers,omitempty"`
+	Privacy        Privacy      `yaml:"privacy,omitempty"`
+}
+
+// Privacy is what a classifier is allowed to see. Zero values keep the
+// defaults: cards, IBANs, and long digit runs are masked; mail can be sent
+// to a configured remote classifier.
+type Privacy struct {
+	RedactEmail bool `yaml:"redact_email,omitempty" json:"redact_email"`
+	RedactPhone bool `yaml:"redact_phone,omitempty" json:"redact_phone"`
+	SubjectOnly bool `yaml:"subject_only,omitempty" json:"subject_only"`
+	RulesOnly   bool `yaml:"rules_only,omitempty" json:"rules_only"`
+	LocalOnly   bool `yaml:"local_only,omitempty" json:"local_only"`
 }
 
 // Classifier is one enabled model. The API key is the environment variable
 // named by key_env, never a value in this file. An empty list calls no provider.
 type Classifier struct {
-	Provider      string  `yaml:"provider"`
-	Model         string  `yaml:"model"`
-	BaseURL       string  `yaml:"base_url"`
-	KeyEnv        string  `yaml:"key_env"`
-	MinConfidence float64 `yaml:"min_confidence"`
-	MinMargin     float64 `yaml:"min_margin"`
-	RPS           float64 `yaml:"rps"`
-	Burst         int     `yaml:"burst"`
-	PriceInput    float64 `yaml:"price_input"`
-	PriceOutput   float64 `yaml:"price_output"`
+	Provider      string  `yaml:"provider,omitempty"`
+	Model         string  `yaml:"model,omitempty"`
+	BaseURL       string  `yaml:"base_url,omitempty"`
+	KeyEnv        string  `yaml:"key_env,omitempty"`
+	MinConfidence float64 `yaml:"min_confidence,omitempty"`
+	MinMargin     float64 `yaml:"min_margin,omitempty"`
+	RPS           float64 `yaml:"rps,omitempty"`
+	Burst         int     `yaml:"burst,omitempty"`
+	PriceInput    float64 `yaml:"price_input,omitempty"`
+	PriceOutput   float64 `yaml:"price_output,omitempty"`
 }
 
 // Profile is one mailbox. Empty host, port, and security are filled from the
 // provider preset. max_chars 0 means the default body cap (1500).
 type Profile struct {
-	Name        string `yaml:"name"`
-	Provider    string `yaml:"provider"`
-	Host        string `yaml:"host"`
-	HostID      string `yaml:"host_id"`
-	Port        int    `yaml:"port"`
-	Security    string `yaml:"security"`
-	Username    string `yaml:"username"`
-	PasswordEnv string `yaml:"password_env"`
-	Email       string `yaml:"email"`
-	Auth        string `yaml:"auth"`
-	CAFile      string `yaml:"ca_file"`
-	CertSHA256  string `yaml:"cert_sha256"`
-	Discover    bool   `yaml:"discover"`
-	MaxChars    int    `yaml:"max_chars"`
+	Name        string `yaml:"name,omitempty"`
+	Provider    string `yaml:"provider,omitempty"`
+	Host        string `yaml:"host,omitempty"`
+	HostID      string `yaml:"host_id,omitempty"`
+	Port        int    `yaml:"port,omitempty"`
+	Security    string `yaml:"security,omitempty"`
+	Username    string `yaml:"username,omitempty"`
+	PasswordEnv string `yaml:"password_env,omitempty"`
+	Email       string `yaml:"email,omitempty"`
+	Auth        string `yaml:"auth,omitempty"`
+	CAFile      string `yaml:"ca_file,omitempty"`
+	CertSHA256  string `yaml:"cert_sha256,omitempty"`
+	Discover    bool   `yaml:"discover,omitempty"`
+	MaxChars    int    `yaml:"max_chars,omitempty"`
 }
 
 var configFields = map[string]struct{}{
@@ -73,6 +85,15 @@ var configFields = map[string]struct{}{
 	"profiles":        {},
 	"categories_file": {},
 	"classifiers":     {},
+	"privacy":         {},
+}
+
+var privacyFields = map[string]struct{}{
+	"redact_email": {},
+	"redact_phone": {},
+	"subject_only": {},
+	"rules_only":   {},
+	"local_only":   {},
 }
 
 var classifierFields = map[string]struct{}{
@@ -177,6 +198,8 @@ func validateTree(doc *yaml.Node) error {
 			return checkScalar(keyNode, val)
 		case "classifiers":
 			return validateClassifiers(val)
+		case "privacy":
+			return validatePrivacy(val)
 		default:
 			return fmt.Errorf("config: unknown field %q at line %d", keyNode.Value, keyNode.Line)
 		}
@@ -332,6 +355,18 @@ func checkFingerprint(val *yaml.Node) error {
 		return fmt.Errorf("config: field \"cert_sha256\" at line %d must be 64 hex characters", val.Line)
 	}
 	return nil
+}
+
+func validatePrivacy(val *yaml.Node) error {
+	if isNull(val) {
+		return nil
+	}
+	if val.Kind != yaml.MappingNode {
+		return fmt.Errorf("config: field \"privacy\" at line %d must be a mapping", val.Line)
+	}
+	return walkMapping(val, privacyFields, func(key string, keyNode, field *yaml.Node) error {
+		return checkBool(keyNode, field)
+	})
 }
 
 func checkBool(keyNode, val *yaml.Node) error {

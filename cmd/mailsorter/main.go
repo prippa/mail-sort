@@ -23,7 +23,7 @@ Usage:
 Global flags come before the command.
 
 Commands:
-  ui          open the local web UI (default; phase 4)
+  ui          open the local web UI (default)
   run         dry-run, confirm, and file mail
   watch       watch a mailbox and file new mail (phase 6)
   undo        reverse a filed run
@@ -121,7 +121,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return writeError(stderr, err)
 		}
 		return runUndo(cfg, fs.Args()[1:], stdout, stderr)
-	case "ui", "watch":
+	case "ui":
+		cfg, path, err := loadConfig(*configPath)
+		if err != nil {
+			return writeError(stderr, err)
+		}
+		return runUI(cfg, path, stdout, stderr)
+	case "watch":
 		if _, _, err := loadConfig(*configPath); err != nil {
 			return writeError(stderr, err)
 		}
@@ -136,7 +142,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func notImplemented(cmd string, stderr io.Writer) int {
 	phase, ok := map[string]string{
-		"ui":    "4",
 		"watch": "6",
 	}[cmd]
 	if !ok {

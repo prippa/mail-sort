@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prippa/mail-sort/internal/config"
 	"github.com/prippa/mail-sort/internal/message"
 )
 
@@ -111,10 +112,14 @@ func Classify(ctx context.Context, in Input, set Set, providers []Provider, cach
 	if decision, ok := matchRules(rules, cats, in); ok {
 		return decision, nil
 	}
+	priv := PrivacyFrom(ctx)
+	if priv.RulesOnly {
+		return decorate(Decision{Category: NeedsReview, Source: "gate"}, cats), nil
+	}
 	if len(providers) == 0 {
 		return Decision{}, errors.New("classify: no classifier is enabled")
 	}
-	features := redactFeatures(featuresFrom(in))
+	features := redactFeatures(shapeFeatures(featuresFrom(in), priv), priv)
 	var lastErr error
 	var last Decision
 	sawDecision := false
@@ -250,13 +255,13 @@ func featuresFrom(in Input) Features {
 	}
 }
 
-func redactFeatures(features Features) Features {
-	features.From = Redact(features.From)
-	features.To = Redact(features.To)
-	features.Subject = Redact(features.Subject)
-	features.Body = Redact(features.Body)
+func redactFeatures(features Features, priv config.Privacy) Features {
+	features.From = redact(features.From, priv)
+	features.To = redact(features.To, priv)
+	features.Subject = redact(features.Subject, priv)
+	features.Body = redact(features.Body, priv)
 	for i := range features.Attachments {
-		features.Attachments[i] = Redact(features.Attachments[i])
+		features.Attachments[i] = redact(features.Attachments[i], priv)
 	}
 	if features.Attachments == nil {
 		features.Attachments = []string{}

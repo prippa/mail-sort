@@ -65,7 +65,7 @@ Global flags come before the command. `--config` overrides the default path.
 
 | Command | Phase | Behavior |
 | --- | --- | --- |
-| `ui` (default) | 4 | not implemented |
+| `ui` (default) | 4 | local page on 127.0.0.1; per-launch token in the cookie and header |
 | `test-conn` | 1 | connects with a password, prints capabilities and folders |
 | `dev-clean` | 1 | prints cleaned messages; does not move mail |
 | `classify` | 2 | classifies one message from stdin; does not move mail |
@@ -108,6 +108,12 @@ profiles:
     # cert_sha256: 64 hex characters
     discover: false # custom provider with an empty host
     max_chars: 1500
+privacy:
+  # redact_email: true
+  # redact_phone: true
+  # subject_only: true   # send subject and sender only
+  # rules_only: true
+  # local_only: true     # refuse a classifier that is not on this computer
 categories_file: categories.yaml # optional; a missing file uses the starter list
 classifiers:
   - provider: jev # jev, openai_compatible, anthropic
