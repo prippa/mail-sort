@@ -237,7 +237,9 @@ Rules run before any model and can match from, domain, to (including plus-addres
 
 `POST {base_url}/v1/systemone`. Default base `https://api.typesafe.ai`. `Authorization: Bearer`. The key comes from the keyring or `TYPESAFE_API_KEY`.
 
-One Choice question per message. `state` carries `from`, `to`, `subject`, `date`, `is_bulk`, `attachments`, and `body`. The question key is `folder`. Instructions tell the model to judge by content. Criteria are the category descriptions plus `needs_review` ("Unclear, ambiguous, or none of the above"). `keep_in_inbox` is also always an option.
+The folder question is a Choice. `state` carries `from`, `to`, `subject`, `date`, `is_bulk`, `attachments`, and `body`. The question key is `folder`. Instructions tell the model to judge by content. Criteria are the category descriptions plus `needs_review` ("Unclear, ambiguous, or none of the above"). `keep_in_inbox` is also always an option.
+
+Jev also sends a Noul question, key `urgent`, unless `urgent: false`. Instructions ask whether the message is time-sensitive. Criteria are `true` and `false` sentences in English. The response `answers.urgent` is `{type, noul}`. `noul` is a probability from 0 to 1 and has no confidence field. The default cutoff is 0.80, a placeholder like the Choice cutoff; `urgent_min` replaces it. At or above the cutoff, a `move` stays in the inbox (`action: none`) and the dry run says why. A `label` is still applied. Rules still win, because they run before the model. The cache key changes when the question is turned on. Changing the cutoff reuses a stored probability.
 
 The response `answers.folder` is `{type, choice, probabilities, confidence}` plus `usage` `{input_tokens, output_tokens}`. Store the response `model` id with the decision. Default request model is `jev-1.13.0`. `jev-latest` and `jev-preview` may be selected; the UI warns that aliases move. As of the models page both aliases point at `jev-1.13.0`.
 
@@ -277,6 +279,8 @@ MOVE is sent only when the server advertises MOVE or IMAP4rev2. Otherwise UIDPLU
 
 Undo reverses a run or selected rows from the stored UIDs and reports what failed.
 
+`backend` on a profile is `imap` (the default), `gmail`, or `graph`. Gmail API filing uses the same `https://mail.google.com/` token: find the message with `rfc822msgid`, refuse `TRASH`, `SPAM`, `DRAFT`, and `SENT`, then `messages.modify` to add the destination label. A move out of INBOX also removes the `INBOX` label. A copy only adds the label. `UNREAD` is never removed. Microsoft Graph filing is a second sign-in with delegated `Mail.ReadWrite` (`https://graph.microsoft.com/Mail.ReadWrite` plus `offline_access`), because that resource is not the IMAP scope. It finds `internetMessageId`, refuses Deleted Items, Junk, Drafts, Sent Items, and recoverable deletions, then `POST /me/messages/{id}/move` or `/copy`. INBOX uses the well-known name `inbox`. Nested folder names are left in place. An API move still needs the Message-ID. Undo of an API move finds the message over IMAP and files it back through the same API. A missing Graph sign-in fails the move and leaves the message.
+
 Watch: IMAP IDLE, re-issued before 29 minutes, polling fallback default 5 minutes, reconnect, token refresh, SIGINT/SIGTERM. The pinned IMAP client restarts IDLE every 28 minutes. `watch` refuses to dial until the profile is confirmed, and it leaves an open dry run in place. A partial apply continues, at most the move cap, then waits one poll interval. README includes a systemd user unit and a Windows Task Scheduler example. An unsigned Windows build can show SmartScreen.
 
 Logging is JSON lines. Per-run summary: counts per category, API calls, tokens, latency, and a cost estimate when the user entered prices. CSV export.
@@ -287,7 +291,9 @@ Local web UI, embedded, bound to `127.0.0.1` on a random port. A per-launch toke
 
 First-run wizard: provider, authenticate, category template, classifier, dry run, review, apply.
 
-Screens: Accounts, Categories, Classifier (including a "Try it" box that shows exactly which fields would be sent), Run, Automation, Activity and Settings (language auto/en/ru, privacy, data dir, redaction).
+Screens: Accounts, Categories, Classifier (including a "Try it" box that shows exactly which fields would be sent, and the Jev urgency cutoff), Run, Automation, Activity, Evaluate, and Settings (language auto/en/ru, privacy, data dir, redaction).
+
+Evaluate lists classified messages stored on this computer. The model's category is kept when the user relabels a row. A suggestion needs at least 8 labels (a correction, or an applied row left as filed). It sweeps cutoffs from 0.50 to 0.95 and prefers the lowest cutoff that misfiles none of those labels. The page says the number is not a calibrated score. Saving it writes `min_confidence` on the first Jev classifier. The page does not call a provider.
 
 In-app EN/RU setup guides for the Google Cloud and Entra consoles.
 
@@ -326,3 +332,5 @@ These stay `// VERIFY` until the cited source is read in the phase that implemen
 - Live IMAP IDLE against Gmail or Microsoft. The in-memory server covers an IDLE wake and the poll fallback. The pinned `go-imap` client restarts IDLE every 28 minutes.
 - A live Jev, OpenAI, or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
 - Anthropic models that reject `tool_choice` type `tool` (the primer names Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1). The client retries a 400 without the force, then once without `strict`. That fallback was not verified against a live model.
+- A live Jev Noul answer. The request follows the published `noul` question (`instructions`, criteria `true` and `false`) and reads `answers.urgent.noul`. The 0.80 cutoff is a product placeholder. The local HTTP test covers the body and the inbox hold.
+- A live Gmail `messages.modify` and a live Graph `message: move`. The clients follow the published methods and are tested with a local HTTP server. `format=minimal` on `messages.get` was not re-read. The Graph scope string `https://graph.microsoft.com/Mail.ReadWrite` was not sent to a live authorize endpoint. The permission name `Mail.ReadWrite` is the least-privileged delegated permission on the move and copy pages.

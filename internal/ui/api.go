@@ -67,27 +67,45 @@ func (s *Server) profileViews(ctx context.Context, cfg config.Config) []map[stri
 			confirmed = false
 		}
 		out = append(out, map[string]any{
-			"name":         profile.Name,
-			"provider":     profile.Provider,
-			"host":         profile.Host,
-			"host_id":      profile.HostID,
-			"port":         profile.Port,
-			"security":     profile.Security,
-			"username":     profile.Username,
-			"email":        profile.Email,
-			"password_env": profile.PasswordEnv,
-			"password_set": lookupSet(s.lookup, profile.PasswordEnv),
-			"auth":         profile.Auth,
-			"client_id":    profile.ClientID,
-			"tenant":       profile.Tenant,
-			"device_code":  profile.DeviceCode,
-			"signed_in":    s.signedIn(profile.Name),
-			"discover":     profile.Discover,
-			"max_chars":    profile.MaxChars,
-			"confirmed":    confirmed,
+			"name":            profile.Name,
+			"provider":        profile.Provider,
+			"host":            profile.Host,
+			"host_id":         profile.HostID,
+			"port":            profile.Port,
+			"security":        profile.Security,
+			"username":        profile.Username,
+			"email":           profile.Email,
+			"password_env":    profile.PasswordEnv,
+			"password_set":    lookupSet(s.lookup, profile.PasswordEnv),
+			"auth":            profile.Auth,
+			"client_id":       profile.ClientID,
+			"tenant":          profile.Tenant,
+			"device_code":     profile.DeviceCode,
+			"signed_in":       s.signedIn(profile.Name),
+			"discover":        profile.Discover,
+			"max_chars":       profile.MaxChars,
+			"confirmed":       confirmed,
+			"backend":         filingBackend(profile.Backend),
+			"graph_signed_in": s.graphSignedIn(profile.Name),
 		})
 	}
 	return out
+}
+
+func filingBackend(name string) string {
+	switch name {
+	case "gmail", "graph":
+		return name
+	default:
+		return "imap"
+	}
+}
+
+func urgentOn(spec config.Classifier) bool {
+	if spec.Urgent != nil {
+		return *spec.Urgent
+	}
+	return spec.Provider == "jev"
 }
 
 func lookupSet(lookup func(string) (string, bool), name string) bool {
@@ -158,6 +176,8 @@ func (s *Server) classifierViews(cfg config.Config) []map[string]any {
 			"price_input":    spec.PriceInput,
 			"price_output":   spec.PriceOutput,
 			"local":          classify.LoopbackBase(base),
+			"urgent":         urgentOn(spec),
+			"urgent_min":     spec.UrgentMin,
 		})
 	}
 	return out
@@ -217,6 +237,8 @@ type profileBody struct {
 	DeviceCode  bool   `json:"device_code"`
 	Discover    bool   `json:"discover"`
 	MaxChars    int    `json:"max_chars"`
+	Backend     string `json:"backend"`
+	Graph       bool   `json:"graph"`
 }
 
 func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +267,7 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		DeviceCode:  body.DeviceCode,
 		Discover:    body.Discover,
 		MaxChars:    body.MaxChars,
+		Backend:     strings.TrimSpace(body.Backend),
 	}
 	for _, existing := range cfg.Profiles {
 		if existing.Name == profile.Name {
@@ -505,6 +528,8 @@ type classifierDTO struct {
 	Burst         int     `json:"burst"`
 	PriceInput    float64 `json:"price_input"`
 	PriceOutput   float64 `json:"price_output"`
+	Urgent        *bool   `json:"urgent"`
+	UrgentMin     float64 `json:"urgent_min"`
 }
 
 func (s *Server) saveClassifiers(w http.ResponseWriter, r *http.Request) {
@@ -530,6 +555,8 @@ func (s *Server) saveClassifiers(w http.ResponseWriter, r *http.Request) {
 			Burst:         item.Burst,
 			PriceInput:    item.PriceInput,
 			PriceOutput:   item.PriceOutput,
+			Urgent:        item.Urgent,
+			UrgentMin:     item.UrgentMin,
 		})
 	}
 	cfg.Classifiers = next

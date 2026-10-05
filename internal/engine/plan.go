@@ -112,6 +112,9 @@ func Plan(ctx context.Context, box Mailbox, clf Classifier, db *store.DB, opt Pl
 		row.Action = decision.Action
 		row.Folder = decision.Folder
 		row.Source = decision.Source
+		if decision.Urgent {
+			row.Detail = "urgent"
+		}
 		row.TokensIn = decision.InputTokens
 		row.TokensOut = decision.OutputTokens
 		if amount, ok := classify.CostUSD(decision.InputTokens, decision.OutputTokens, decision.PriceInput, decision.PriceOutput); ok {

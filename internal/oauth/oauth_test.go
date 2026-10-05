@@ -263,6 +263,28 @@ func TestInvalidGrantDoesNotEchoToken(t *testing.T) {
 	}
 }
 
+func TestGraphScopeStaysOffTheIMAPSignIn(t *testing.T) {
+	_, scopes, err := providerEndpoint(Account{Auth: "oauth_microsoft"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scopes) != 2 || scopes[0] != MicrosoftIMAPScope || scopes[1] != OfflineAccess {
+		t.Fatalf("imap scopes %v", scopes)
+	}
+	_, graphScopes, err := providerEndpoint(Account{Auth: "oauth_microsoft", Graph: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graphScopes) != 2 || graphScopes[0] != MicrosoftGraphScope || graphScopes[1] != OfflineAccess {
+		t.Fatalf("graph scopes %v", graphScopes)
+	}
+	for _, scope := range graphScopes {
+		if strings.Contains(scope, "IMAP") {
+			t.Fatalf("graph scopes %v", graphScopes)
+		}
+	}
+}
+
 func TestMissingClientAndRefreshDoNotDial(t *testing.T) {
 	account := Account{Auth: "oauth_google", Email: "ada@example.com", HTTP: &http.Client{Transport: failTransport{t}}}
 	_, err := Begin(context.Background(), account)

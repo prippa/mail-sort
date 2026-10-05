@@ -205,6 +205,41 @@ func allUIDs(t *testing.T, client *imapclient.Client) []imap.UID {
 	return found.AllUIDs()
 }
 
+type recordingFiler struct {
+	moveFrom string
+	moveTo   string
+	copyTo   string
+}
+
+func (f *recordingFiler) MoveMessage(_ context.Context, _ string, from, to string) error {
+	f.moveFrom = from
+	f.moveTo = to
+	return nil
+}
+
+func (f *recordingFiler) CopyMessage(_ context.Context, _, to string) error {
+	f.copyTo = to
+	return nil
+}
+
+func TestFilerSkipsIMAP(t *testing.T) {
+	session := &Session{}
+	filer := &recordingFiler{}
+	session.UseFiler(filer)
+	if _, err := session.MoveUID(context.Background(), "INBOX", 0, "<a@b.c>", "Work"); err != nil {
+		t.Fatal(err)
+	}
+	if filer.moveFrom != "INBOX" || filer.moveTo != "Work" {
+		t.Fatalf("move %+v", filer)
+	}
+	if _, err := session.CopyUID(context.Background(), "INBOX", 0, "<a@b.c>", "Work"); err != nil {
+		t.Fatal(err)
+	}
+	if filer.copyTo != "Work" {
+		t.Fatalf("copy %+v", filer)
+	}
+}
+
 func containsUID(uids []imap.UID, uid imap.UID) bool {
 	for _, item := range uids {
 		if item == uid {

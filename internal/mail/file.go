@@ -19,6 +19,22 @@ type Filed struct {
 	DestUID uint32
 }
 
+// MessageFiler files one message by its RFC 5322 Message-ID.
+// It must not delete mail and must not change read state.
+type MessageFiler interface {
+	MoveMessage(ctx context.Context, messageID, from, to string) error
+	CopyMessage(ctx context.Context, messageID, to string) error
+}
+
+// UseFiler sends later moves and copies through filer.
+// IMAP stays in place when filer is nil.
+func (s *Session) UseFiler(filer MessageFiler) {
+	if s == nil {
+		return
+	}
+	s.filer = filer
+}
+
 // ExpungeFailed means the message was copied and UID EXPUNGE of that UID failed.
 // DestUID is the copy. The source is still in the mailbox.
 type ExpungeFailed struct {
@@ -91,6 +107,15 @@ func (s *Session) EnsureMailbox(ctx context.Context, name string) error {
 func (s *Session) MoveUID(ctx context.Context, mailbox string, uid uint32, messageID, dest string) (Filed, error) {
 	if err := ctx.Err(); err != nil {
 		return Filed{}, err
+	}
+	if s.filer != nil {
+		if strings.TrimSpace(messageID) == "" || strings.TrimSpace(mailbox) == "" || strings.TrimSpace(dest) == "" {
+			return Filed{}, errors.New("imap: mailbox or message id is empty")
+		}
+		if err := s.filer.MoveMessage(ctx, messageID, mailbox, dest); err != nil {
+			return Filed{}, err
+		}
+		return Filed{}, nil
 	}
 	if uid == 0 || strings.TrimSpace(mailbox) == "" || strings.TrimSpace(dest) == "" {
 		return Filed{}, errors.New("imap: mailbox or uid is empty")
@@ -171,6 +196,15 @@ func (s *Session) MoveUID(ctx context.Context, mailbox string, uid uint32, messa
 func (s *Session) CopyUID(ctx context.Context, mailbox string, uid uint32, messageID, dest string) (Filed, error) {
 	if err := ctx.Err(); err != nil {
 		return Filed{}, err
+	}
+	if s.filer != nil {
+		if strings.TrimSpace(messageID) == "" || strings.TrimSpace(dest) == "" {
+			return Filed{}, errors.New("imap: mailbox or message id is empty")
+		}
+		if err := s.filer.CopyMessage(ctx, messageID, dest); err != nil {
+			return Filed{}, err
+		}
+		return Filed{}, nil
 	}
 	if uid == 0 || strings.TrimSpace(mailbox) == "" || strings.TrimSpace(dest) == "" {
 		return Filed{}, errors.New("imap: mailbox or uid is empty")

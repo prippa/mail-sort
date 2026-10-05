@@ -18,6 +18,9 @@ document.addEventListener('alpine:init', function () {
       connection: { folders: [] },
       oauth: { status: '', url: '', user_code: '', verification_uri: '', error: '' },
       oauthName: '',
+      oauthGraph: false,
+      evaluateProfile: '',
+      evaluate: { rows: [], suggestion: { ok: false, threshold: 0, labeled: 0, wrong: 0, auto: 0 } },
       poll: 0,
       pending: '',
       report: { rows: [], note_key: '' },
@@ -199,8 +202,33 @@ document.addEventListener('alpine:init', function () {
           tenant: this.draft.provider === 'microsoft' ? this.draft.tenant : '',
           device_code: this.draft.provider === 'microsoft' && !!this.draft.device_code,
           discover: !!this.draft.discover,
-          max_chars: Number(this.draft.max_chars) || 0
+          max_chars: Number(this.draft.max_chars) || 0,
+          backend: this.filingBackend()
         }
+      },
+
+      backendChoices: function (provider) {
+        var out = [{ value: 'imap', label: this.text('accounts.backend_imap') }]
+        if (provider === 'gmail') {
+          out.push({ value: 'gmail', label: this.text('accounts.backend_gmail') })
+        }
+        if (provider === 'microsoft') {
+          out.push({ value: 'graph', label: this.text('accounts.backend_graph') })
+        }
+        return out
+      },
+
+      filingBackend: function () {
+        if (this.draft.use_password) {
+          return 'imap'
+        }
+        if (this.draft.provider === 'gmail' && this.draft.backend === 'gmail') {
+          return 'gmail'
+        }
+        if (this.draft.provider === 'microsoft' && this.draft.backend === 'graph') {
+          return 'graph'
+        }
+        return 'imap'
       },
 
       saveAccount: async function () {
@@ -225,6 +253,7 @@ document.addEventListener('alpine:init', function () {
         await this.guard(async function () {
           var data = await self.api('POST', '/api/oauth/start', self.profilePayload())
           self.oauthName = self.draft.name
+          self.oauthGraph = false
           self.oauth = data
           self.notice = self.text('oauth.waiting')
           await self.load()
@@ -237,6 +266,7 @@ document.addEventListener('alpine:init', function () {
         await this.guard(async function () {
           var data = await self.api('POST', '/api/oauth/start', { name: name })
           self.oauthName = name
+          self.oauthGraph = false
           self.oauth = data
           self.notice = self.text('oauth.waiting')
           await self.load()
@@ -259,7 +289,11 @@ document.addEventListener('alpine:init', function () {
           return
         }
         try {
-          var data = await this.api('GET', '/api/oauth/status?profile=' + encodeURIComponent(this.oauthName))
+          var path = '/api/oauth/status?profile=' + encodeURIComponent(this.oauthName)
+          if (this.oauthGraph) {
+            path = path + '&graph=1'
+          }
+          var data = await this.api('GET', path)
           this.oauth = data
           if (data.status === 'done') {
             clearInterval(this.poll)
@@ -381,7 +415,9 @@ document.addEventListener('alpine:init', function () {
           rps: 0,
           burst: 0,
           price_input: 0,
-          price_output: 0
+          price_output: 0,
+          urgent: provider === 'jev',
+          urgent_min: 0
         })
       },
 
@@ -409,7 +445,9 @@ document.addEventListener('alpine:init', function () {
             rps: Number(item.rps) || 0,
             burst: Number(item.burst) || 0,
             price_input: Number(item.price_input) || 0,
-            price_output: Number(item.price_output) || 0
+            price_output: Number(item.price_output) || 0,
+            urgent: !!item.urgent,
+            urgent_min: Number(item.urgent_min) || 0
           })
         }
         await this.guard(async function () {
@@ -588,6 +626,114 @@ document.addEventListener('alpine:init', function () {
         }
       },
 
+      saveBackend: async function (profile) {
+        var self = this
+        await this.guard(async function () {
+          self.boot = await self.api('POST', '/api/profiles', {
+            name: profile.name,
+            provider: profile.provider,
+            host: profile.host,
+            host_id: profile.host_id,
+            port: profile.port,
+            security: profile.security,
+            username: profile.username,
+            password_env: profile.password_env,
+            email: profile.email,
+            auth: profile.auth,
+            client_id: profile.client_id,
+            tenant: profile.tenant,
+            device_code: profile.device_code,
+            discover: profile.discover,
+            max_chars: profile.max_chars,
+            backend: profile.backend || 'imap'
+          })
+          self.copyBoot()
+          self.notice = self.text('accounts.saved')
+        })
+      },
+
+      signInGraph: async function (name) {
+        var self = this
+        await this.guard(async function () {
+          var data = await self.api('POST', '/api/oauth/start', { name: name, graph: true })
+          self.oauthName = name
+          self.oauthGraph = true
+          self.oauth = data
+          self.notice = self.text('oauth.waiting')
+          await self.load()
+          self.startPoll()
+        })
+      },
+
+      openEvaluate: async function () {
+        this.go('evaluate')
+        if (!this.evaluateProfile && this.boot.profiles && this.boot.profiles.length) {
+          this.evaluateProfile = this.boot.profiles[0].name
+        }
+        await this.loadEvaluate()
+      },
+
+      loadEvaluate: async function () {
+        var self = this
+        if (!this.evaluateProfile) {
+          this.evaluate = { rows: [], suggestion: { ok: false, threshold: 0, labeled: 0, wrong: 0, auto: 0 } }
+          return
+        }
+        await this.guard(async function () {
+          var data = await self.api('GET', '/api/evaluate?profile=' + encodeURIComponent(self.evaluateProfile))
+          self.applyEvaluate(data)
+        })
+      },
+
+      applyEvaluate: function (data) {
+        var rows = data.rows || []
+        for (var i = 0; i < rows.length; i++) {
+          rows[i].label = rows[i].category
+        }
+        data.rows = rows
+        if (!data.suggestion) {
+          data.suggestion = { ok: false, threshold: 0, labeled: 0, wrong: 0, auto: 0 }
+        }
+        this.evaluate = data
+      },
+
+      labelRow: async function (row) {
+        var self = this
+        await this.guard(async function () {
+          var data = await self.api('POST', '/api/evaluate/label', {
+            profile: self.evaluateProfile,
+            uid: row.uid,
+            category: row.label
+          })
+          self.applyEvaluate(data)
+          self.notice = self.text('evaluate.labeled_saved')
+        })
+      },
+
+      useThreshold: async function () {
+        var self = this
+        await this.guard(async function () {
+          var value = self.evaluate.suggestion.threshold
+          var found = false
+          for (var i = 0; i < self.classifiers.length; i++) {
+            if (self.classifiers[i].provider === 'jev') {
+              self.classifiers[i].min_confidence = value
+              found = true
+              break
+            }
+          }
+          if (!found) {
+            self.error = self.text('evaluate.no_classifier')
+            return
+          }
+          await self.saveClassifiers()
+          if (self.error) {
+            return
+          }
+          self.notice = self.text('evaluate.saved')
+        })
+      },
+
       activityLine: function (run) {
         var cost = run.has_cost ? (' $' + run.cost_usd) : ''
         return '#' + run.id + ' ' + run.profile + ' ' + run.mailbox + ' ' + run.status +
@@ -614,7 +760,8 @@ function blankDraft() {
     client_id: '',
     tenant: 'common',
     device_code: false,
-    use_password: false
+    use_password: false,
+    backend: 'imap'
   }
 }
 

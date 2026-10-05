@@ -28,6 +28,12 @@ const (
 	GoogleScope = "https://mail.google.com/"
 	// MicrosoftIMAPScope is the Outlook IMAP scope documented by Microsoft.
 	MicrosoftIMAPScope = "https://outlook.office.com/IMAP.AccessAsUser.All"
+	// MicrosoftGraphScope is the delegated Mail.ReadWrite permission.
+	// Message move and copy list it as the least-privileged delegated permission.
+	// It is a different resource from IMAP.AccessAsUser.All, so Graph filing
+	// uses a second sign-in.
+	// VERIFY: a live authorize request with this v2 scope string was not run.
+	MicrosoftGraphScope = "https://graph.microsoft.com/Mail.ReadWrite"
 	// OfflineAccess asks Microsoft for a refresh token.
 	OfflineAccess = "offline_access"
 
@@ -52,6 +58,8 @@ type Account struct {
 	Tenant   string
 	Email    string
 	Device   bool
+	// Graph asks for Mail.ReadWrite instead of the IMAP scope.
+	Graph bool
 	// Endpoint overrides the provider URLs. Tests set it. Production leaves it nil.
 	Endpoint *oauth2.Endpoint
 	// HTTP is the client used for the token endpoint. Tests set it.
@@ -448,11 +456,15 @@ func providerEndpoint(account Account) (oauth2.Endpoint, []string, error) {
 			tenant = "common"
 		}
 		base := "https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0/"
+		scopes := []string{MicrosoftIMAPScope, OfflineAccess}
+		if account.Graph {
+			scopes = []string{MicrosoftGraphScope, OfflineAccess}
+		}
 		return oauth2.Endpoint{
 			AuthURL:       base + "authorize",
 			TokenURL:      base + "token",
 			DeviceAuthURL: base + "devicecode",
-		}, []string{MicrosoftIMAPScope, OfflineAccess}, nil
+		}, scopes, nil
 	default:
 		return oauth2.Endpoint{}, nil, fmt.Errorf("oauth: auth %q is not a sign-in", account.Auth)
 	}

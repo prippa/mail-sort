@@ -43,6 +43,10 @@ type Result struct {
 	Reason       string
 	InputTokens  int
 	OutputTokens int
+	// Noul is the Jev urgency probability, from 0 to 1. HasNoul is false when
+	// that question was not asked or the answer was absent.
+	Noul    float64
+	HasNoul bool
 }
 
 // Decision is the pipeline result. Source is rule, cache, a provider name, or gate.
@@ -61,6 +65,9 @@ type Decision struct {
 	OutputTokens int     `json:"output_tokens,omitempty"`
 	PriceInput   float64 `json:"-"`
 	PriceOutput  float64 `json:"-"`
+	Noul         float64 `json:"noul,omitempty"`
+	HasNoul      bool    `json:"has_noul,omitempty"`
+	Urgent       bool    `json:"urgent,omitempty"`
 }
 
 // Provider classifies one redacted feature set.
@@ -124,7 +131,11 @@ func Classify(ctx context.Context, in Input, set Set, providers []Provider, cach
 	var last Decision
 	sawDecision := false
 	for _, provider := range providers {
-		key, err := cacheKey(features, cats, provider.Name(), provider.Model())
+		extra := ""
+		if urgentMin(provider) > 0 {
+			extra = "urgent"
+		}
+		key, err := cacheKey(features, cats, provider.Name(), provider.Model(), extra)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -138,10 +149,11 @@ func Classify(ctx context.Context, in Input, set Set, providers []Provider, cach
 				cached.PriceInput = provider.PriceInput()
 				cached.PriceOutput = provider.PriceOutput()
 				cached = decorate(cached, cats)
-				if accept(cached, cats, provider.MinConfidence(), provider.MinMargin()) {
-					return cached, nil
+				settled, stop := settle(cached, provider, cats)
+				if stop {
+					return settled, nil
 				}
-				last = cached
+				last = settled
 				sawDecision = true
 				continue
 			}
@@ -162,13 +174,17 @@ func Classify(ctx context.Context, in Input, set Set, providers []Provider, cach
 			}
 		}
 		decision.Source = provider.Name()
-		if accept(decision, cats, provider.MinConfidence(), provider.MinMargin()) {
-			return decision, nil
+		settled, stop := settle(decision, provider, cats)
+		if stop {
+			return settled, nil
 		}
-		last = decision
+		last = settled
 		sawDecision = true
 	}
 	if sawDecision {
+		if last.Urgent {
+			return last, nil
+		}
 		return decorate(Decision{
 			Category:    NeedsReview,
 			Confidence:  last.Confidence,
@@ -199,7 +215,49 @@ func decisionFromResult(result Result, provider Provider) Decision {
 		OutputTokens: result.OutputTokens,
 		PriceInput:   provider.PriceInput(),
 		PriceOutput:  provider.PriceOutput(),
+		Noul:         result.Noul,
+		HasNoul:      result.HasNoul,
 	}
+}
+
+func urgentMin(provider Provider) float64 {
+	type min interface {
+		UrgentMin() float64
+	}
+	if provider == nil {
+		return 0
+	}
+	if cutter, ok := provider.(min); ok {
+		return cutter.UrgentMin()
+	}
+	return 0
+}
+
+// holdUrgent keeps a move in the inbox when the Noul probability is at least
+// the cutoff. A label stays a label. Noul has no separate confidence; the
+// cutoff is a product placeholder, the same kind of number as 0.80 for Choice.
+func holdUrgent(decision Decision, min float64) Decision {
+	if min <= 0 || !decision.HasNoul || decision.Noul < min {
+		decision.Urgent = false
+		return decision
+	}
+	decision.Urgent = true
+	if decision.Action == "move" {
+		decision.Action = "none"
+		decision.Folder = ""
+	}
+	return decision
+}
+
+func settle(decision Decision, provider Provider, cats []Category) (Decision, bool) {
+	decision = holdUrgent(decision, urgentMin(provider))
+	if decision.Urgent {
+		return decision, true
+	}
+	if accept(decision, cats, provider.MinConfidence(), provider.MinMargin()) {
+		return decision, true
+	}
+	return decision, false
 }
 
 func decorate(decision Decision, cats []Category) Decision {
@@ -298,17 +356,19 @@ type criterion struct {
 	Text string `json:"text"`
 }
 
-func cacheKey(features Features, cats []Category, provider, model string) (string, error) {
+func cacheKey(features Features, cats []Category, provider, model, extra string) (string, error) {
 	view := struct {
 		Features   Features    `json:"features"`
 		Categories []criterion `json:"categories"`
 		Provider   string      `json:"provider"`
 		Model      string      `json:"model"`
+		Extra      string      `json:"extra,omitempty"`
 	}{
 		Features:   features,
 		Categories: make([]criterion, len(cats)),
 		Provider:   provider,
 		Model:      model,
+		Extra:      extra,
 	}
 	for i, cat := range cats {
 		view.Categories[i] = criterion{Key: cat.Key, Text: cat.Criteria()}

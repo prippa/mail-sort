@@ -24,6 +24,8 @@ make build
 
 `watch` files mail that arrives after a dry run has been confirmed and applied. It waits with IMAP IDLE and renews that wait before 29 minutes. Without IDLE it checks every 5 minutes (`--poll 5m`). Ctrl+C or SIGTERM stops it. A dropped connection is opened again, with a pause that grows up to 5 minutes. At most 200 moves are filed, then watch waits one poll interval before the rest. Stop `watch` before starting another dry run.
 
+Jev also asks whether a message is time-sensitive. At or above the urgency cutoff (placeholder 0.80), a move stays in the inbox. A label is still applied. The Evaluate screen suggests a confidence cutoff from labels on this computer. That number is not a calibrated score. Gmail and Microsoft accounts can file through the Gmail API or Microsoft Graph. The default remains IMAP. Graph uses a separate sign-in.
+
 An unsigned `mailsorter-windows-amd64.exe` can make Windows show SmartScreen.
 
 ### systemd user service
@@ -60,4 +62,4 @@ Run at logon so the credential store is available. Keep the password in the user
 schtasks /Create /SC ONLOGON /TN MailSorter /TR "C:\path\mailsorter-windows-amd64.exe watch --profile Work"
 ```
 
-Кратко: программа подключается к почте по IMAP, классифицирует письма и после подтверждения раскладывает их по папкам. Первый запуск профиля только показывает план. Команда `watch` после этого ждёт новую почту и раскладывает её. Пароль и ключ API задаются переменными окружения или хранятся на этом компьютере, а не в файле настроек. Google и Microsoft входят со страницы на этом компьютере. Команда без аргументов открывает эту страницу.
+Кратко: программа подключается к почте по IMAP, классифицирует письма и после подтверждения раскладывает их по папкам. Первый запуск профиля только показывает план. Команда `watch` после этого ждёт новую почту и раскладывает её. Если Jev считает письмо срочным, перенос остаётся во входящих. Экран «Оценка» предлагает порог по меткам на этом компьютере. Для Gmail и Microsoft можно выбрать раскладку через API; по умолчанию остаётся IMAP. Пароль и ключ API задаются переменными окружения или хранятся на этом компьютере, а не в файле настроек. Google и Microsoft входят со страницы на этом компьютере. Команда без аргументов открывает эту страницу.

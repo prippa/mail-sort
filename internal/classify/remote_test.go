@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prippa/mail-sort/internal/message"
 )
 
 func TestJevRequestUsesChoiceAndDoesNotSendDisplayNames(t *testing.T) {
@@ -361,6 +363,62 @@ func TestBucketBurstDoesNotWait(t *testing.T) {
 	}
 	if time.Since(start) > 200*time.Millisecond {
 		t.Fatal("burst waited")
+	}
+}
+
+func TestJevNoulKeepsUrgentMailInTheInbox(t *testing.T) {
+	t.Parallel()
+	const key = "test-key-value"
+	bodies := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies <- raw
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"model":"jev-1.13.0",
+			"answers":{
+				"folder":{"type":"choice","choice":"work","confidence":0.91,"probabilities":{"work":0.91,"personal":0.03,"needs_review":0.03,"keep_in_inbox":0.03}},
+				"urgent":{"type":"noul","noul":0.93}
+			},
+			"usage":{"input_tokens":12,"output_tokens":3}
+		}`)
+	}))
+	t.Cleanup(srv.Close)
+	cats := []Category{
+		{Key: "work", Name: "Work", NameRU: "РаботаУникальная", Description: "Job mail. Not personal.", Folder: "Work", Action: "move"},
+		{Key: "personal", Name: "Personal", Description: "From a person. Not work.", Folder: "Personal", Action: "move"},
+	}
+	client := &jevClient{opts: providerOpts{
+		kind: "jev", model: "jev-1.13.0", baseURL: srv.URL, apiKey: key, http: srv.Client(),
+		minConfidence: 0.8, urgentMin: 0.8,
+	}}
+	decision, err := Classify(t.Context(), Input{Message: message.Message{Subject: "Please reply today", Body: "The deadline is today."}}, Set{Categories: cats}, []Provider{client}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Urgent || decision.Action != "none" || decision.Folder != "" || decision.Category != "work" || mathAbs(decision.Noul-0.93) > 1e-9 {
+		t.Fatalf("decision=%+v", decision)
+	}
+	body := <-bodies
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatal(err)
+	}
+	questions := req["questions"].(map[string]any)
+	urgent := questions["urgent"].(map[string]any)
+	if urgent["type"] != "noul" || !strings.Contains(urgent["instructions"].(string), "time-sensitive") {
+		t.Fatalf("urgent=%v", urgent)
+	}
+	criteria := urgent["criteria"].(map[string]any)
+	if criteria["true"] == "" || criteria["false"] == "" {
+		t.Fatalf("criteria=%v", criteria)
+	}
+	folder := questions["folder"].(map[string]any)
+	if folder["type"] != "choice" {
+		t.Fatalf("folder=%v", folder)
+	}
+	if strings.Contains(string(body), "РаботаУникальная") {
+		t.Fatal("display name was sent to Jev")
 	}
 }
 

@@ -39,6 +39,12 @@ func RefreshAccount(profile string) string {
 	return "refresh:" + profile
 }
 
+// GraphAccount is the keyring account for a Microsoft Graph refresh token.
+// It is separate from the IMAP refresh token.
+func GraphAccount(profile string) string {
+	return "graph:" + profile
+}
+
 // APIKeyAccount is the keyring account for a classifier environment variable.
 func APIKeyAccount(envName string) string {
 	return "apikey:" + envName

@@ -39,6 +39,7 @@ type Session struct {
 	password string
 	hint     string
 	updates  chan uint32
+	filer    MessageFiler
 	once     sync.Once
 }
 

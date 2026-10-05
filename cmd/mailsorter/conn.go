@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prippa/mail-sort/internal/backend"
 	"github.com/prippa/mail-sort/internal/config"
 	"github.com/prippa/mail-sort/internal/logging"
 	"github.com/prippa/mail-sort/internal/mail"
@@ -197,7 +198,36 @@ func connectAccount(ctx context.Context, profile config.Profile, account mail.Ac
 	if err != nil {
 		return nil, err
 	}
-	return mail.NewClient().ConnectOAuth(ctx, account, source)
+	session, err := mail.NewClient().ConnectOAuth(ctx, account, source)
+	if err != nil {
+		return nil, err
+	}
+	bindBackend(session, profile, store, source)
+	return session, nil
+}
+
+func bindBackend(session *mail.Session, profile config.Profile, vault secrets.Store, imap *oauth.Source) {
+	var graph backend.Access
+	if profile.Backend == "graph" && vault != nil {
+		refresh, err := vault.Get(secrets.GraphAccount(profile.Name))
+		if err == nil {
+			account, err := oauth.FromProfile(profile)
+			if err == nil {
+				account.Graph = true
+				source, err := oauth.NewSource(account, refresh, func(next string) error {
+					return vault.Set(secrets.GraphAccount(profile.Name), next)
+				})
+				if err == nil {
+					graph = source.AccessToken
+				}
+			}
+		}
+	}
+	var imapAccess backend.Access
+	if imap != nil {
+		imapAccess = imap.AccessToken
+	}
+	backend.Bind(session, profile.Backend, imapAccess, graph)
 }
 
 func passwordFromEnv(name string) (string, error) {

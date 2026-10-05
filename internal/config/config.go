@@ -62,6 +62,9 @@ type Classifier struct {
 	Burst         int     `yaml:"burst,omitempty"`
 	PriceInput    float64 `yaml:"price_input,omitempty"`
 	PriceOutput   float64 `yaml:"price_output,omitempty"`
+	// Urgent nil means the Jev urgency question is on. False turns it off.
+	Urgent    *bool   `yaml:"urgent,omitempty"`
+	UrgentMin float64 `yaml:"urgent_min,omitempty"`
 }
 
 // Profile is one mailbox. Empty host, port, and security are filled from the
@@ -84,6 +87,8 @@ type Profile struct {
 	CertSHA256  string `yaml:"cert_sha256,omitempty"`
 	Discover    bool   `yaml:"discover,omitempty"`
 	MaxChars    int    `yaml:"max_chars,omitempty"`
+	// Backend is imap, gmail, or graph. Empty means IMAP.
+	Backend string `yaml:"backend,omitempty"`
 }
 
 var configFields = map[string]struct{}{
@@ -113,6 +118,8 @@ var classifierFields = map[string]struct{}{
 	"burst":          {},
 	"price_input":    {},
 	"price_output":   {},
+	"urgent":         {},
+	"urgent_min":     {},
 }
 
 var profileFields = map[string]struct{}{
@@ -133,6 +140,7 @@ var profileFields = map[string]struct{}{
 	"cert_sha256":  {},
 	"discover":     {},
 	"max_chars":    {},
+	"backend":      {},
 }
 
 // Load reads path and rejects secret fields, aliases, and unknown keys.
@@ -227,7 +235,7 @@ func validateProfiles(val *yaml.Node) error {
 		if item.Kind != yaml.MappingNode {
 			return fmt.Errorf("config: profile at line %d must be a mapping", item.Line)
 		}
-		var name string
+		var name, providerName, authName, backendName string
 		err := walkMapping(item, profileFields, func(key string, keyNode, field *yaml.Node) error {
 			switch key {
 			case "name":
@@ -251,8 +259,30 @@ func validateProfiles(val *yaml.Node) error {
 				return checkPort(field)
 			case "security":
 				return checkChoice(keyNode, field, "implicit_tls", "starttls")
+			case "provider":
+				if err := checkScalar(keyNode, field); err != nil {
+					return err
+				}
+				if field.Kind == yaml.ScalarNode && !isNull(field) {
+					providerName = field.Value
+				}
+				return nil
 			case "auth":
-				return checkChoice(keyNode, field, "password", "oauth_google", "oauth_microsoft")
+				if err := checkChoice(keyNode, field, "password", "oauth_google", "oauth_microsoft"); err != nil {
+					return err
+				}
+				if field.Kind == yaml.ScalarNode && !isNull(field) {
+					authName = field.Value
+				}
+				return nil
+			case "backend":
+				if err := checkChoice(keyNode, field, "imap", "gmail", "graph"); err != nil {
+					return err
+				}
+				if field.Kind == yaml.ScalarNode && !isNull(field) {
+					backendName = field.Value
+				}
+				return nil
 			case "password_env":
 				return checkEnvName(keyNode, field)
 			case "client_id":
@@ -277,6 +307,33 @@ func validateProfiles(val *yaml.Node) error {
 		if name == "" {
 			return fmt.Errorf("config: profile at line %d is missing a name", item.Line)
 		}
+		if err := checkBackend(item.Line, providerName, authName, backendName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkBackend(line int, provider, auth, backend string) error {
+	switch backend {
+	case "", "imap":
+		return nil
+	case "gmail":
+		if provider != "gmail" {
+			return fmt.Errorf("config: field \"backend\" at line %d does not match the provider", line)
+		}
+		if auth != "" && auth != "oauth_google" {
+			return fmt.Errorf("config: field \"backend\" at line %d needs Google sign-in", line)
+		}
+	case "graph":
+		if provider != "microsoft" {
+			return fmt.Errorf("config: field \"backend\" at line %d does not match the provider", line)
+		}
+		if auth != "" && auth != "oauth_microsoft" {
+			return fmt.Errorf("config: field \"backend\" at line %d needs Microsoft sign-in", line)
+		}
+	default:
+		return fmt.Errorf("config: field \"backend\" at line %d is not allowed", line)
 	}
 	return nil
 }
@@ -465,6 +522,10 @@ func validateClassifiers(val *yaml.Node) error {
 				return checkInt(keyNode.Value, field, 0, 10000)
 			case "price_input", "price_output":
 				return checkNumber(keyNode.Value, field, 0, 1_000_000)
+			case "urgent":
+				return checkBool(keyNode, field)
+			case "urgent_min":
+				return checkNumber(keyNode.Value, field, 0, 1)
 			default:
 				return fmt.Errorf("config: unknown field %q at line %d", keyNode.Value, keyNode.Line)
 			}

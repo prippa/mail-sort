@@ -88,6 +88,7 @@ type Row struct {
 	Subject       string
 	From          string
 	Category      string
+	Predicted     string
 	Provider      string
 	Model         string
 	Confidence    float64
@@ -195,6 +196,7 @@ CREATE TABLE IF NOT EXISTS run_rows (
 	subject TEXT NOT NULL DEFAULT '',
 	from_addr TEXT NOT NULL DEFAULT '',
 	category TEXT NOT NULL DEFAULT '',
+	model_category TEXT NOT NULL DEFAULT '',
 	provider TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
 	confidence REAL NOT NULL DEFAULT 0,
@@ -241,6 +243,37 @@ CREATE TABLE IF NOT EXISTS classification_consent (
 				return fmt.Errorf("store: open: %w", err)
 			}
 		}
+	}
+	if err := addColumn(ctx, db, "run_rows", "model_category", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func addColumn(ctx context.Context, db *sql.DB, table, column, decl string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return fmt.Errorf("store: open: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("store: open: %w", err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: open: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+decl); err != nil {
+		return fmt.Errorf("store: open: %w", err)
 	}
 	return nil
 }
@@ -454,12 +487,16 @@ func (db *DB) CreateRun(ctx context.Context, run Run, rows []Row) (int64, error)
 		return 0, fmt.Errorf("store: write run: %w", err)
 	}
 	for _, row := range rows {
+		predicted := row.Predicted
+		if predicted == "" {
+			predicted = row.Category
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO run_rows (
-			run_id, uid, message_id, subject, from_addr, category, provider, model, confidence,
+			run_id, uid, message_id, subject, from_addr, category, model_category, provider, model, confidence,
 			action, folder, source, overridden, status, detail, tokens_in, tokens_out, cost_usd, has_cost
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, row.UID, clip(row.MessageID, 500), clip(row.Subject, 300), clip(row.From, 300),
-			row.Category, row.Provider, row.Model, row.Confidence, row.Action, row.Folder, row.Source, 0,
+			row.Category, predicted, row.Provider, row.Model, row.Confidence, row.Action, row.Folder, row.Source, 0,
 			row.Status, clip(row.Detail, 500), row.TokensIn, row.TokensOut, row.CostUSD, boolInt(row.HasCost)); err != nil {
 			return 0, fmt.Errorf("store: write row: %w", err)
 		}
@@ -814,7 +851,7 @@ func scanRow(row scanner) (Row, error) {
 	var out Row
 	var uid, dest, filedUID, filedValidity, overridden, hasCost int64
 	err := row.Scan(
-		&out.ID, &out.RunID, &uid, &out.MessageID, &out.Subject, &out.From, &out.Category,
+		&out.ID, &out.RunID, &uid, &out.MessageID, &out.Subject, &out.From, &out.Category, &out.Predicted,
 		&out.Provider, &out.Model, &out.Confidence, &out.Action, &out.Folder, &out.Source,
 		&overridden, &out.Status, &dest, &out.Detail, &out.Filed, &filedUID, &filedValidity,
 		&out.TokensIn, &out.TokensOut, &out.CostUSD, &hasCost,
@@ -845,7 +882,7 @@ func scanRow(row scanner) (Row, error) {
 
 const runColumns = `id, profile, mailbox, uid_validity, status, created_at, applied_at, undone_at, moves, copies, errors, api_calls, tokens_in, tokens_out, cost_usd, has_cost`
 
-const rowColumns = `id, run_id, uid, message_id, subject, from_addr, category, provider, model, confidence, action, folder, source, overridden, status, dest_uid, detail, filed, filed_uid, filed_validity, tokens_in, tokens_out, cost_usd, has_cost`
+const rowColumns = `id, run_id, uid, message_id, subject, from_addr, category, model_category, provider, model, confidence, action, folder, source, overridden, status, dest_uid, detail, filed, filed_uid, filed_validity, tokens_in, tokens_out, cost_usd, has_cost`
 
 func chmodDB(path string) error {
 	if err := os.Chmod(path, 0o600); err != nil {

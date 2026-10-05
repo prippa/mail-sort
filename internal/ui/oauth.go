@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prippa/mail-sort/internal/backend"
 	"github.com/prippa/mail-sort/internal/config"
 	"github.com/prippa/mail-sort/internal/mail"
 	"github.com/prippa/mail-sort/internal/oauth"
@@ -21,6 +22,7 @@ type signIn struct {
 	authURL         string
 	userCode        string
 	verificationURI string
+	graph           bool
 	cancel          context.CancelFunc
 }
 
@@ -37,6 +39,15 @@ func (s *Server) signedIn(name string) bool {
 		return false
 	}
 	_, err = vault.Get(secrets.RefreshAccount(name))
+	return err == nil
+}
+
+func (s *Server) graphSignedIn(name string) bool {
+	vault, err := s.secretStore()
+	if err != nil {
+		return false
+	}
+	_, err = vault.Get(secrets.GraphAccount(name))
 	return err == nil
 }
 
@@ -91,7 +102,39 @@ func (s *Server) connectOAuth(ctx context.Context, profile config.Profile, accou
 	if err != nil {
 		return nil, err
 	}
-	return mail.NewClient().ConnectOAuth(ctx, account, source)
+	session, err := mail.NewClient().ConnectOAuth(ctx, account, source)
+	if err != nil {
+		return nil, err
+	}
+	s.bindBackend(session, profile, source)
+	return session, nil
+}
+
+func (s *Server) bindBackend(session *mail.Session, profile config.Profile, imap *oauth.Source) {
+	var graph backend.Access
+	if profile.Backend == "graph" {
+		vault, err := s.secretStore()
+		if err == nil {
+			refresh, getErr := vault.Get(secrets.GraphAccount(profile.Name))
+			if getErr == nil {
+				account, profileErr := oauth.FromProfile(profile)
+				if profileErr == nil {
+					account.Graph = true
+					source, sourceErr := oauth.NewSource(account, refresh, func(next string) error {
+						return vault.Set(secrets.GraphAccount(profile.Name), next)
+					})
+					if sourceErr == nil {
+						graph = source.AccessToken
+					}
+				}
+			}
+		}
+	}
+	var imapAccess backend.Access
+	if imap != nil {
+		imapAccess = imap.AccessToken
+	}
+	backend.Bind(session, profile.Backend, imapAccess, graph)
 }
 
 func (s *Server) startOAuth(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +157,13 @@ func (s *Server) startOAuth(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
+	if body.Graph {
+		if profile.Provider != "microsoft" && profile.Auth != "oauth_microsoft" {
+			s.fail(w, http.StatusBadRequest, "config: field \"backend\" needs Microsoft sign-in")
+			return
+		}
+		oAccount.Graph = true
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	var flow *oauth.Flow
 	s.withoutLock(func() {
@@ -124,7 +174,11 @@ func (s *Server) startOAuth(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
-	if previous := s.signIns[profile.Name]; previous != nil && previous.cancel != nil {
+	key := profile.Name
+	if oAccount.Graph {
+		key = graphSignKey(profile.Name)
+	}
+	if previous := s.signIns[key]; previous != nil && previous.cancel != nil {
 		previous.cancel()
 	}
 	attempt := &signIn{
@@ -132,9 +186,10 @@ func (s *Server) startOAuth(w http.ResponseWriter, r *http.Request) {
 		authURL:         flow.AuthURL(),
 		userCode:        flow.UserCode(),
 		verificationURI: flow.VerificationURI(),
+		graph:           oAccount.Graph,
 		cancel:          cancel,
 	}
-	s.signIns[profile.Name] = attempt
+	s.signIns[key] = attempt
 	s.log.Info("oauth sign-in", slog.String("profile", profile.Name), slog.String("auth", profile.Auth))
 	if attempt.authURL != "" && s.openBrowser != nil {
 		_ = s.openBrowser(attempt.authURL)
@@ -142,7 +197,7 @@ func (s *Server) startOAuth(w http.ResponseWriter, r *http.Request) {
 	if attempt.verificationURI != "" && attempt.authURL == "" && s.openBrowser != nil {
 		_ = s.openBrowser(attempt.verificationURI)
 	}
-	go s.finishOAuth(ctx, profile.Name, flow)
+	go s.finishOAuth(ctx, key, flow)
 	writeJSON(w, http.StatusOK, signInView(attempt))
 }
 
@@ -167,6 +222,7 @@ func (s *Server) oauthProfile(ctx context.Context, cfg config.Config, body profi
 		DeviceCode:  body.DeviceCode,
 		Discover:    body.Discover,
 		MaxChars:    body.MaxChars,
+		Backend:     strings.TrimSpace(body.Backend),
 	}
 	for _, existing := range cfg.Profiles {
 		if existing.Name == profile.Name {
@@ -207,7 +263,7 @@ func (s *Server) finishOAuth(ctx context.Context, name string, flow *oauth.Flow)
 	} else if vault, vaultErr := s.secretStore(); vaultErr != nil {
 		status = "error"
 		message = vaultErr.Error()
-	} else if err := vault.Set(secrets.RefreshAccount(name), tok.RefreshToken); err != nil {
+	} else if err := vault.Set(refreshKey(name), tok.RefreshToken); err != nil {
 		status = "error"
 		message = strings.ReplaceAll(err.Error(), tok.RefreshToken, "[redacted]")
 	}
@@ -219,11 +275,31 @@ func (s *Server) finishOAuth(ctx context.Context, name string, flow *oauth.Flow)
 	}
 	attempt.status = status
 	attempt.message = message
+	profile, _ := signInAccount(name)
 	if status == "done" {
-		s.log.Info("oauth sign-in stored", slog.String("profile", name))
+		s.log.Info("oauth sign-in stored", slog.String("profile", profile))
 		return
 	}
-	s.log.Info("oauth sign-in failed", slog.String("profile", name), slog.String("error", message))
+	s.log.Info("oauth sign-in failed", slog.String("profile", profile), slog.String("error", message))
+}
+
+func graphSignKey(name string) string {
+	return "\x00graph:" + name
+}
+
+func signInAccount(name string) (string, bool) {
+	if strings.HasPrefix(name, "\x00graph:") {
+		return strings.TrimPrefix(name, "\x00graph:"), true
+	}
+	return name, false
+}
+
+func refreshKey(name string) string {
+	profile, graph := signInAccount(name)
+	if graph {
+		return secrets.GraphAccount(profile)
+	}
+	return secrets.RefreshAccount(profile)
 }
 
 func (s *Server) withoutLock(fn func()) {
@@ -234,6 +310,9 @@ func (s *Server) withoutLock(fn func()) {
 
 func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.URL.Query().Get("profile"))
+	if r.URL.Query().Get("graph") == "1" {
+		name = graphSignKey(name)
+	}
 	attempt := s.signIns[name]
 	if attempt == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "idle"})

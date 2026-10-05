@@ -289,6 +289,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.bootstrap(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/activity":
 		s.activity(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/evaluate":
+		s.evaluate(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/evaluate/label":
+		s.labelExample(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/run":
 		s.currentRun(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/oauth/start":

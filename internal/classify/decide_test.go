@@ -95,16 +95,16 @@ func TestCacheKeyChangesWithFeaturesAndCategories(t *testing.T) {
 	left := featuresFrom(Input{Message: message.Message{Body: "one"}})
 	right := left
 	right.Body = "two"
-	a, err := cacheKey(left, cats, "jev", "jev-1.13.0")
+	a, err := cacheKey(left, cats, "jev", "jev-1.13.0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := cacheKey(right, cats, "jev", "jev-1.13.0")
+	b, err := cacheKey(right, cats, "jev", "jev-1.13.0", "")
 	if err != nil || a == b {
 		t.Fatalf("features did not change the key")
 	}
 	cats[0].Description = "Different rubric. Not the old one."
-	c, err := cacheKey(left, cats, "jev", "jev-1.13.0")
+	c, err := cacheKey(left, cats, "jev", "jev-1.13.0", "")
 	if err != nil || a == c {
 		t.Fatal("categories did not change the key")
 	}
@@ -142,4 +142,52 @@ func (f *fakeProvider) Classify(ctx context.Context, _ Features, _ []Category) (
 		return Result{}, f.err
 	}
 	return f.result, nil
+}
+
+type urgentFake struct {
+	*fakeProvider
+	cutoff float64
+}
+
+func (u urgentFake) UrgentMin() float64 { return u.cutoff }
+
+func TestUrgentMoveStaysInInbox(t *testing.T) {
+	t.Parallel()
+	cats := withReserved([]Category{{Key: "work", Description: "Job mail. Not personal.", Folder: "Work", Action: "move"}})
+	set := Set{Categories: cats}
+	provider := urgentFake{
+		fakeProvider: &fakeProvider{
+			name: "jev", model: "jev-1.13.0", min: 0.8,
+			result: Result{Category: "work", Confidence: 0.95, HasNoul: true, Noul: 0.91},
+		},
+		cutoff: 0.8,
+	}
+	decision, err := Classify(t.Context(), Input{Message: message.Message{Subject: "Need this today"}}, set, []Provider{provider}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Urgent || decision.Action != "none" || decision.Folder != "" || decision.Category != "work" {
+		t.Fatalf("decision=%+v", decision)
+	}
+
+	provider.result.Noul = 0.2
+	provider.calls = 0
+	quiet, err := Classify(t.Context(), Input{Message: message.Message{Subject: "Need this today"}}, set, []Provider{provider}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quiet.Urgent || quiet.Action != "move" || quiet.Folder != "Work" {
+		t.Fatalf("quiet=%+v", quiet)
+	}
+
+	provider.result.Noul = 0.95
+	provider.calls = 0
+	labelSet := Set{Categories: []Category{{Key: "work", Description: "Job mail. Not personal.", Folder: "Work", Action: "label"}}}
+	labeled, err := Classify(t.Context(), Input{Message: message.Message{Subject: "Need this today"}}, labelSet, []Provider{provider}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !labeled.Urgent || labeled.Action != "label" || labeled.Folder != "Work" {
+		t.Fatalf("label=%+v", labeled)
+	}
 }

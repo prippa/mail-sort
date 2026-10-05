@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,6 +158,100 @@ func TestConsentForgetAndRecent(t *testing.T) {
 	recent, err := db.RecentRuns(ctx, 10)
 	if err != nil || len(recent) != 1 || recent[0].ID != id {
 		t.Fatalf("%+v %v", recent, err)
+	}
+}
+
+func TestPredictedCategorySurvivesOverride(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t, filepath.Join(t.TempDir(), "mailsorter.db"))
+	_, err := db.CreateRun(ctx, Run{Profile: "Work", Mailbox: "INBOX", UIDValidity: 3}, []Row{
+		{UID: 7, Subject: "Hello", From: "Ada <ada@example.com>", Category: "work", Status: RowPending, Action: "move", Folder: "Work", Confidence: 0.91},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := db.UpdatePending(ctx, "Work", 7, "personal", "move", "Personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Predicted != "work" || row.Category != "personal" || !row.Override {
+		t.Fatalf("%+v", row)
+	}
+	labeled, err := db.LabeledExamples(ctx, "Work", 10)
+	if err != nil || len(labeled) != 1 || labeled[0].Predicted != "work" || labeled[0].Category != "personal" {
+		t.Fatalf("%+v %v", labeled, err)
+	}
+}
+
+func TestOldDatabaseGainsModelCategory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE run_rows (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		run_id INTEGER NOT NULL,
+		uid INTEGER NOT NULL,
+		message_id TEXT NOT NULL DEFAULT '',
+		subject TEXT NOT NULL DEFAULT '',
+		from_addr TEXT NOT NULL DEFAULT '',
+		category TEXT NOT NULL DEFAULT '',
+		provider TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		confidence REAL NOT NULL DEFAULT 0,
+		action TEXT NOT NULL DEFAULT '',
+		folder TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL DEFAULT '',
+		overridden INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL,
+		dest_uid INTEGER NOT NULL DEFAULT 0,
+		detail TEXT NOT NULL DEFAULT '',
+		filed TEXT NOT NULL DEFAULT '',
+		filed_uid INTEGER NOT NULL DEFAULT 0,
+		filed_validity INTEGER NOT NULL DEFAULT 0,
+		tokens_in INTEGER NOT NULL DEFAULT 0,
+		tokens_out INTEGER NOT NULL DEFAULT 0,
+		cost_usd REAL NOT NULL DEFAULT 0,
+		has_cost INTEGER NOT NULL DEFAULT 0,
+		UNIQUE (run_id, uid)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db := openDB(t, path)
+	rows, err := db.db.Query(`PRAGMA table_info(run_rows)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	found := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "model_category" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("model_category was not added")
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateRun(context.Background(), Run{Profile: "Work", Mailbox: "INBOX", UIDValidity: 1}, []Row{
+		{UID: 1, Category: "work", Status: RowPending},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

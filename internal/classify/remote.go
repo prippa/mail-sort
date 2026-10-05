@@ -23,20 +23,26 @@ import (
 )
 
 const (
-	defaultJevModel   = "jev-1.13.0"
-	defaultJevBase    = "https://api.typesafe.ai"
-	defaultAnthropic  = "https://api.anthropic.com"
-	jevMinConfidence  = 0.80
-	llmMinConfidence  = 0.70
-	maxAttempts       = 3
-	backoffInitial    = 500 * time.Millisecond
-	backoffMax        = 5 * time.Second
-	retryAfterCap     = 30 * time.Second
-	responseByteLimit = 1 << 20
-	reasonRunes       = 140
-	anthropicVersion  = "2023-06-01"
-	classifyToolName  = "classify_message"
-	anthropicTokens   = 1024
+	defaultJevModel  = "jev-1.13.0"
+	defaultJevBase   = "https://api.typesafe.ai"
+	defaultAnthropic = "https://api.anthropic.com"
+	jevMinConfidence = 0.80
+	llmMinConfidence = 0.70
+	// defaultUrgentMin is a product placeholder. Noul returns a probability
+	// and no confidence field, so the probability is compared with this cutoff.
+	defaultUrgentMin      = 0.80
+	jevUrgentInstructions = "Does this email need a prompt reply or action because it is time-sensitive?"
+	jevUrgentTrue         = "The sender asks for a prompt reply, a deadline is close, or the message is an emergency."
+	jevUrgentFalse        = "The message can wait. Newsletters, receipts, and routine notices are not urgent."
+	maxAttempts           = 3
+	backoffInitial        = 500 * time.Millisecond
+	backoffMax            = 5 * time.Second
+	retryAfterCap         = 30 * time.Second
+	responseByteLimit     = 1 << 20
+	reasonRunes           = 140
+	anthropicVersion      = "2023-06-01"
+	classifyToolName      = "classify_message"
+	anthropicTokens       = 1024
 
 	// jevInstructions tells Jev to judge the message content. The state itself
 	// stays in the state object, which the API treats as data.
@@ -102,6 +108,7 @@ type providerOpts struct {
 	minMargin     float64
 	priceInput    float64
 	priceOutput   float64
+	urgentMin     float64
 	limit         *bucket
 	log           *slog.Logger
 	http          *http.Client
@@ -153,6 +160,7 @@ func Providers(specs []config.Classifier, lookup func(string) (string, bool), lo
 			if opts.minConfidence == 0 {
 				opts.minConfidence = jevMinConfidence
 			}
+			opts.urgentMin = jevUrgentMin(spec)
 			rps, burst := spec.RPS, spec.Burst
 			if rps == 0 && burst == 0 {
 				rps, burst = 2, 4
@@ -204,6 +212,7 @@ func (c *jevClient) MinConfidence() float64 { return c.opts.minConfidence }
 func (c *jevClient) MinMargin() float64     { return c.opts.minMargin }
 func (c *jevClient) PriceInput() float64    { return c.opts.priceInput }
 func (c *jevClient) PriceOutput() float64   { return c.opts.priceOutput }
+func (c *jevClient) UrgentMin() float64     { return c.opts.urgentMin }
 
 type openAIClient struct{ opts providerOpts }
 
@@ -227,16 +236,27 @@ func (c *jevClient) Classify(ctx context.Context, features Features, cats []Cate
 	if err := c.opts.needKey(); err != nil {
 		return Result{}, err
 	}
-	payload, err := json.Marshal(jevRequest{
-		State: features,
-		Model: c.opts.model,
-		Questions: map[string]jevQuestion{
-			"folder": {
-				Type:         "choice",
-				Instructions: jevInstructions,
-				Criteria:     criteriaMap(cats),
-			},
+	questions := map[string]jevQuestion{
+		"folder": {
+			Type:         "choice",
+			Instructions: jevInstructions,
+			Criteria:     criteriaMap(cats),
 		},
+	}
+	if c.opts.urgentMin > 0 {
+		questions["urgent"] = jevQuestion{
+			Type:         "noul",
+			Instructions: jevUrgentInstructions,
+			Criteria: map[string]string{
+				"true":  jevUrgentTrue,
+				"false": jevUrgentFalse,
+			},
+		}
+	}
+	payload, err := json.Marshal(jevRequest{
+		State:     features,
+		Model:     c.opts.model,
+		Questions: questions,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("classify: jev request: %w", err)
@@ -265,14 +285,17 @@ type jevQuestion struct {
 }
 
 type jevResponse struct {
-	Model   string `json:"model"`
-	Answers struct {
-		Folder choiceAnswer `json:"folder"`
-	} `json:"answers"`
-	Usage struct {
+	Model   string                     `json:"model"`
+	Answers map[string]json.RawMessage `json:"answers"`
+	Usage   struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
+}
+
+type noulAnswer struct {
+	Type string   `json:"type"`
+	Noul *float64 `json:"noul"`
 }
 
 type choiceAnswer struct {
@@ -284,10 +307,17 @@ type choiceAnswer struct {
 
 func parseJev(body []byte, cats []Category) (Result, error) {
 	var resp jevResponse
-	if err := json.Unmarshal(body, &resp); err != nil || strings.TrimSpace(resp.Answers.Folder.Choice) == "" {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return Result{}, errInvalidResponse
 	}
-	answer := resp.Answers.Folder
+	raw, ok := resp.Answers["folder"]
+	if !ok {
+		return Result{}, errInvalidResponse
+	}
+	var answer choiceAnswer
+	if err := json.Unmarshal(raw, &answer); err != nil || strings.TrimSpace(answer.Choice) == "" {
+		return Result{}, errInvalidResponse
+	}
 	confidence, hasConfidence, err := readConfidence(answer.Confidence)
 	if err != nil {
 		return Result{}, err
@@ -296,6 +326,10 @@ func parseJev(body []byte, cats []Category) (Result, error) {
 		confidence = ChoiceConfidence(maxProb(answer.Probabilities), len(cats))
 	}
 	margin, hasMargin := probabilityMargin(answer.Probabilities)
+	noul, hasNoul, err := readNoul(resp.Answers["urgent"])
+	if err != nil {
+		return Result{}, err
+	}
 	model := resp.Model
 	if model == "" {
 		model = defaultJevModel
@@ -308,7 +342,36 @@ func parseJev(body []byte, cats []Category) (Result, error) {
 		Model:        model,
 		InputTokens:  resp.Usage.InputTokens,
 		OutputTokens: resp.Usage.OutputTokens,
+		Noul:         noul,
+		HasNoul:      hasNoul,
 	}, nil
+}
+
+func readNoul(raw json.RawMessage) (float64, bool, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false, nil
+	}
+	var answer noulAnswer
+	if err := json.Unmarshal(raw, &answer); err != nil || answer.Noul == nil {
+		return 0, false, errInvalidResponse
+	}
+	if answer.Type != "" && answer.Type != "noul" {
+		return 0, false, errInvalidResponse
+	}
+	if *answer.Noul < 0 || *answer.Noul > 1 {
+		return 0, false, errInvalidResponse
+	}
+	return *answer.Noul, true, nil
+}
+
+func jevUrgentMin(spec config.Classifier) float64 {
+	if spec.Urgent != nil && !*spec.Urgent {
+		return 0
+	}
+	if spec.UrgentMin > 0 {
+		return spec.UrgentMin
+	}
+	return defaultUrgentMin
 }
 
 func (c *openAIClient) Classify(ctx context.Context, features Features, cats []Category) (Result, error) {
