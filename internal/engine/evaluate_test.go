@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math"
 	"testing"
 
 	"github.com/prippa/mail-sort/internal/store"
@@ -26,6 +27,18 @@ func TestSuggestThresholdPrefersACleanCutoff(t *testing.T) {
 	)
 	got := SuggestThreshold(examples)
 	if !got.OK || got.Threshold != 0.70 || got.Wrong != 0 || got.Labeled != 8 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestSuggestThresholdIgnoresNonFiniteConfidence(t *testing.T) {
+	t.Parallel()
+	examples := make([]store.Example, 8)
+	for i := range examples {
+		examples[i] = store.Example{Predicted: "work", Category: "work", Confidence: math.NaN()}
+	}
+	got := SuggestThreshold(examples)
+	if got.OK || got.Labeled != 0 {
 		t.Fatalf("%+v", got)
 	}
 }

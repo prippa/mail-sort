@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // protectedGraph lists well-known folders this client will not file from.
@@ -23,11 +23,14 @@ var protectedGraph = []string{
 // Graph files by internetMessageId using message move and copy.
 // VERIFY: a live Microsoft mailbox was not modified.
 type Graph struct {
-	Access   Access
-	Base     string
-	HTTP     *http.Client
+	Access Access
+	Base   string
+	HTTP   *http.Client
+
+	mu       sync.Mutex
 	blocked  map[string]struct{}
 	resolved bool
+	folders  map[string]string
 }
 
 // NewGraph returns a filer. An empty base uses the Graph v1.0 host.
@@ -63,7 +66,8 @@ func (g *Graph) file(ctx context.Context, messageID, from, to string, move bool)
 		return err
 	}
 	if move && !isInbox(from) {
-		if _, err = cleanFolder(from); err != nil {
+		from, err = cleanFolder(from)
+		if err != nil {
 			return err
 		}
 	}
@@ -73,6 +77,15 @@ func (g *Graph) file(ctx context.Context, messageID, from, to string, move bool)
 	}
 	if err := g.refuseParent(ctx, parent); err != nil {
 		return err
+	}
+	if move {
+		sourceID, err := g.folderID(ctx, from)
+		if errors.Is(err, errFolderMissing) || (err == nil && sourceID != parent) {
+			return errors.New("backend: message is not in that folder")
+		}
+		if err != nil {
+			return err
+		}
 	}
 	dest, err := g.destination(ctx, to)
 	if err != nil {
@@ -109,7 +122,7 @@ func (g *Graph) find(ctx context.Context, messageID string) (string, string, err
 	}
 	query := endpoint.Query()
 	query.Set("$filter", filter)
-	query.Set("$select", "id,parentFolderId")
+	query.Set("$select", "id,parentFolderId,internetMessageId")
 	query.Set("$top", "2")
 	endpoint.RawQuery = query.Encode()
 	raw, status, err := call(ctx, g.HTTP, "graph", token, http.MethodGet, endpoint.String(), nil)
@@ -121,20 +134,31 @@ func (g *Graph) find(ctx context.Context, messageID string) (string, string, err
 	}
 	var listed struct {
 		Value []struct {
-			ID             string `json:"id"`
-			ParentFolderID string `json:"parentFolderId"`
+			ID                string `json:"id"`
+			ParentFolderID    string `json:"parentFolderId"`
+			InternetMessageID string `json:"internetMessageId"`
 		} `json:"value"`
+		Next string `json:"@odata.nextLink"`
 	}
 	if err := json.Unmarshal(raw, &listed); err != nil {
 		return "", "", errors.New("graph: response was not a message list")
 	}
-	if len(listed.Value) != 1 || listed.Value[0].ID == "" {
-		if len(listed.Value) == 0 {
-			return "", "", errors.New("graph: no message matched that Message-ID")
-		}
+	if listed.Next != "" || len(listed.Value) > 1 {
 		return "", "", errors.New("graph: more than one message matched that Message-ID")
 	}
+	if len(listed.Value) == 0 || listed.Value[0].ID == "" {
+		return "", "", errors.New("graph: no message matched that Message-ID")
+	}
+	if !sameMessageID(listed.Value[0].InternetMessageID, messageID) {
+		return "", "", errors.New("graph: response did not confirm the Message-ID")
+	}
 	return listed.Value[0].ID, listed.Value[0].ParentFolderID, nil
+}
+
+func sameMessageID(got, want string) bool {
+	got = strings.Trim(strings.TrimSpace(got), "<>")
+	want = strings.Trim(strings.TrimSpace(want), "<>")
+	return got != "" && got == want
 }
 
 func (g *Graph) refuseParent(ctx context.Context, parent string) error {
@@ -144,23 +168,29 @@ func (g *Graph) refuseParent(ctx context.Context, parent string) error {
 	if err := g.loadProtected(ctx); err != nil {
 		return err
 	}
-	if _, ok := g.blocked[parent]; ok {
+	g.mu.Lock()
+	_, blocked := g.blocked[parent]
+	g.mu.Unlock()
+	if blocked {
 		return errors.New("backend: refusing to open that folder")
 	}
 	return nil
 }
 
 func (g *Graph) loadProtected(ctx context.Context) error {
+	g.mu.Lock()
 	if g.resolved {
+		g.mu.Unlock()
 		return nil
 	}
+	g.mu.Unlock()
 	blocked := make(map[string]struct{}, len(protectedGraph))
 	token, err := tokenOf(ctx, g.Access)
 	if err != nil {
 		return err
 	}
 	for _, name := range protectedGraph {
-		raw, status, err := call(ctx, g.HTTP, "graph", token, http.MethodGet, g.base()+"/mailFolders/"+name, nil)
+		raw, status, err := call(ctx, g.HTTP, "graph", token, http.MethodGet, g.base()+"/mailFolders/"+url.PathEscape(name), nil)
 		if err != nil {
 			return err
 		}
@@ -178,9 +208,52 @@ func (g *Graph) loadProtected(ctx context.Context) error {
 		}
 		blocked[folder.ID] = struct{}{}
 	}
-	g.blocked = blocked
-	g.resolved = true
+	g.mu.Lock()
+	if !g.resolved {
+		g.blocked = blocked
+		g.resolved = true
+	}
+	g.mu.Unlock()
 	return nil
+}
+
+func (g *Graph) folderID(ctx context.Context, name string) (string, error) {
+	if isInbox(name) {
+		if id, ok := g.cachedFolder("inbox"); ok {
+			return id, nil
+		}
+		id, err := g.wellKnown(ctx, "inbox")
+		if err != nil {
+			return "", err
+		}
+		g.rememberFolder("inbox", id)
+		return id, nil
+	}
+	return g.lookupFolder(ctx, name)
+}
+
+func (g *Graph) wellKnown(ctx context.Context, name string) (string, error) {
+	token, err := tokenOf(ctx, g.Access)
+	if err != nil {
+		return "", err
+	}
+	raw, status, err := call(ctx, g.HTTP, "graph", token, http.MethodGet, g.base()+"/mailFolders/"+url.PathEscape(name), nil)
+	if err != nil {
+		return "", err
+	}
+	if status == http.StatusNotFound {
+		return "", errFolderMissing
+	}
+	if status != http.StatusOK {
+		return "", &statusError{name: "graph", status: status}
+	}
+	var folder struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &folder); err != nil || folder.ID == "" {
+		return "", errors.New("graph: response was not a folder")
+	}
+	return folder.ID, nil
 }
 
 func (g *Graph) destination(ctx context.Context, name string) (string, error) {
@@ -214,10 +287,14 @@ func (g *Graph) destination(ctx context.Context, name string) (string, error) {
 	if err := json.Unmarshal(raw, &created); err != nil || created.ID == "" {
 		return "", errors.New("graph: response was not a folder")
 	}
+	g.rememberFolder(name, created.ID)
 	return created.ID, nil
 }
 
 func (g *Graph) lookupFolder(ctx context.Context, name string) (string, error) {
+	if id, ok := g.cachedFolder(name); ok {
+		return id, nil
+	}
 	token, err := tokenOf(ctx, g.Access)
 	if err != nil {
 		return "", err
@@ -252,7 +329,27 @@ func (g *Graph) lookupFolder(ctx context.Context, name string) (string, error) {
 	if len(listed.Value) != 1 || listed.Value[0].ID == "" {
 		return "", errors.New("graph: more than one folder has that name")
 	}
+	g.rememberFolder(name, listed.Value[0].ID)
 	return listed.Value[0].ID, nil
 }
 
-var errFolderMissing = fmt.Errorf("graph: folder was not found")
+func (g *Graph) cachedFolder(name string) (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	id, ok := g.folders[name]
+	return id, ok && id != ""
+}
+
+func (g *Graph) rememberFolder(name, id string) {
+	if name == "" || id == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.folders == nil {
+		g.folders = map[string]string{}
+	}
+	g.folders[name] = id
+}
+
+var errFolderMissing = errors.New("graph: folder was not found")

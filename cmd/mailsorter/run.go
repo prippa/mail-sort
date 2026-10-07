@@ -25,7 +25,7 @@ import (
 
 const runTimeout = 30 * time.Minute
 
-const runUsageText = `usage: mailsorter run --profile NAME [--folder INBOX] [--limit 200] [--unread] [--since YYYY-MM-DD] [--max-chars N] [--workers 4] [--csv path]
+const runUsageText = `usage: mailsorter run --profile NAME [--folder INBOX] [--limit 200] [--unread] [--since YYYY-MM-DD] [--max-chars N] [--workers 80] [--csv path]
        mailsorter run --profile NAME --confirm
        mailsorter run --profile NAME --override UID=category
        mailsorter run --profile NAME --apply [--copy-only] [--max-moves 200]
@@ -110,7 +110,7 @@ func runMail(cfg config.Config, configPath string, args []string, stdout, stderr
 		}
 		return 2
 	}
-	if *profile == "" || fs.NArg() != 0 || *limit < 1 || *limit > 10000 || *workers < 1 || *workers > 32 || *maxMoves < 1 || *maxMoves > 100000 || *maxChars < 0 || *maxChars > 100000 {
+	if *profile == "" || fs.NArg() != 0 || *limit < 1 || *limit > 10000 || *workers < 1 || *workers > engine.MaxWorkers || *maxMoves < 1 || *maxMoves > 100000 || *maxChars < 0 || *maxChars > 100000 {
 		fs.Usage()
 		return 2
 	}

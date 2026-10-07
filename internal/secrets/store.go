@@ -50,6 +50,11 @@ func APIKeyAccount(envName string) string {
 	return "apikey:" + envName
 }
 
+// GoogleClientAccount is the keyring account for one profile's Desktop client secret.
+func GoogleClientAccount(profile string) string {
+	return "google-client:" + profile
+}
+
 // Store keeps long-lived secrets. It does not keep access tokens.
 type Store interface {
 	Get(account string) (string, error)

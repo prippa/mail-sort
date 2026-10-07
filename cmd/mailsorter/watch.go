@@ -23,7 +23,7 @@ import (
 	"github.com/prippa/mail-sort/internal/store"
 )
 
-const watchUsageText = `usage: mailsorter watch --profile NAME [--folder INBOX] [--poll 5m] [--limit 200] [--unread] [--since YYYY-MM-DD] [--max-chars N] [--workers 4] [--max-moves 200] [--copy-only] [--include-flagged] [--include-drafts]
+const watchUsageText = `usage: mailsorter watch --profile NAME [--folder INBOX] [--poll 5m] [--limit 200] [--unread] [--since YYYY-MM-DD] [--max-chars N] [--workers 80] [--max-moves 200] [--copy-only] [--include-flagged] [--include-drafts]
 `
 
 func runWatch(cfg config.Config, configPath string, args []string, stdout, stderr io.Writer) int {
@@ -52,7 +52,7 @@ func runWatch(cfg config.Config, configPath string, args []string, stdout, stder
 		}
 		return 2
 	}
-	if *profile == "" || fs.NArg() != 0 || *limit < 1 || *limit > 10000 || *workers < 1 || *workers > 32 || *maxMoves < 1 || *maxMoves > 100000 || *maxChars < 0 || *maxChars > 100000 || *poll < time.Second || *poll > 30*time.Minute {
+	if *profile == "" || fs.NArg() != 0 || *limit < 1 || *limit > 10000 || *workers < 1 || *workers > engine.MaxWorkers || *maxMoves < 1 || *maxMoves > 100000 || *maxChars < 0 || *maxChars > 100000 || *poll < time.Second || *poll > 30*time.Minute {
 		fs.Usage()
 		return 2
 	}

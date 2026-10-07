@@ -252,6 +252,13 @@ func holdUrgent(decision Decision, min float64) Decision {
 func settle(decision Decision, provider Provider, cats []Category) (Decision, bool) {
 	decision = holdUrgent(decision, urgentMin(provider))
 	if decision.Urgent {
+		// A low-confidence label is not applied. The message stays put, and it
+		// is not sent to Needs review, because that category may move it.
+		if decision.Action != "label" || accept(decision, cats, provider.MinConfidence(), provider.MinMargin()) {
+			return decision, true
+		}
+		decision.Action = "none"
+		decision.Folder = ""
 		return decision, true
 	}
 	if accept(decision, cats, provider.MinConfidence(), provider.MinMargin()) {

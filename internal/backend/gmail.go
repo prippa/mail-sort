@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // Gmail files by RFC 5322 Message-ID using users.messages.list, messages.get,
@@ -16,6 +17,15 @@ type Gmail struct {
 	Access Access
 	Base   string
 	HTTP   *http.Client
+
+	mu     sync.Mutex
+	labels []gmailLabel
+	loaded bool
+}
+
+type gmailLabel struct {
+	ID   string
+	Name string
 }
 
 // NewGmail returns a filer. An empty base uses the documented Gmail API host.
@@ -61,7 +71,8 @@ func (g *Gmail) plan(ctx context.Context, messageID, from, to string, move bool)
 		return "", nil, nil, err
 	}
 	if move && !isInbox(from) {
-		if _, err = cleanFolder(from); err != nil {
+		from, err = cleanFolder(from)
+		if err != nil {
 			return "", nil, nil, err
 		}
 	}
@@ -71,6 +82,11 @@ func (g *Gmail) plan(ctx context.Context, messageID, from, to string, move bool)
 	}
 	if protectedGmail(labels) {
 		return "", nil, nil, errors.New("backend: refusing to open that folder")
+	}
+	if move {
+		if err := g.requireSource(ctx, labels, from); err != nil {
+			return "", nil, nil, err
+		}
 	}
 	toID, err := g.ensureLabel(ctx, to)
 	if err != nil {
@@ -95,6 +111,33 @@ func (g *Gmail) plan(ctx context.Context, messageID, from, to string, move bool)
 		}
 	}
 	return found, []string{toID}, remove, nil
+}
+
+func (g *Gmail) requireSource(ctx context.Context, labels []string, from string) error {
+	id := "INBOX"
+	if !isInbox(from) {
+		var err error
+		id, err = g.lookupLabel(ctx, from)
+		if errors.Is(err, errLabelMissing) {
+			return errors.New("backend: message is not in that folder")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if !hasLabel(labels, id) {
+		return errors.New("backend: message is not in that folder")
+	}
+	return nil
+}
+
+func hasLabel(labels []string, id string) bool {
+	for _, label := range labels {
+		if label == id {
+			return true
+		}
+	}
+	return false
 }
 
 func protectedGmail(labels []string) bool {
@@ -131,15 +174,16 @@ func (g *Gmail) find(ctx context.Context, messageID string) (string, []string, e
 		Messages []struct {
 			ID string `json:"id"`
 		} `json:"messages"`
+		NextPageToken string `json:"nextPageToken"`
 	}
 	if err := json.Unmarshal(raw, &listed); err != nil {
 		return "", nil, errors.New("gmail: response was not a message list")
 	}
-	if len(listed.Messages) != 1 || listed.Messages[0].ID == "" {
-		if len(listed.Messages) == 0 {
-			return "", nil, errors.New("gmail: no message matched that Message-ID")
-		}
+	if listed.NextPageToken != "" || len(listed.Messages) > 1 {
 		return "", nil, errors.New("gmail: more than one message matched that Message-ID")
+	}
+	if len(listed.Messages) == 0 || listed.Messages[0].ID == "" {
+		return "", nil, errors.New("gmail: no message matched that Message-ID")
 	}
 	id := listed.Messages[0].ID
 	meta, err := url.Parse(g.base() + "/messages/" + url.PathEscape(id))
@@ -187,28 +231,62 @@ func (g *Gmail) ensureLabel(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	if status == http.StatusConflict {
+		g.forgetLabels()
 		return g.lookupLabel(ctx, name)
 	}
 	if status != http.StatusOK && status != http.StatusCreated {
 		return "", &statusError{name: "gmail", status: status}
 	}
-	return labelID(raw)
+	id, err = labelID(raw)
+	if err != nil {
+		return "", err
+	}
+	g.rememberLabel(name, id)
+	return id, nil
 }
 
 func (g *Gmail) lookupLabel(ctx context.Context, name string) (string, error) {
 	if isInbox(name) {
 		return "INBOX", nil
 	}
-	token, err := tokenOf(ctx, g.Access)
+	labels, err := g.labelList(ctx)
 	if err != nil {
 		return "", err
+	}
+	var found string
+	for _, label := range labels {
+		if label.Name != name {
+			continue
+		}
+		if found != "" {
+			return "", errors.New("gmail: more than one label has that name")
+		}
+		found = label.ID
+	}
+	if found == "" {
+		return "", errLabelMissing
+	}
+	return found, nil
+}
+
+func (g *Gmail) labelList(ctx context.Context) ([]gmailLabel, error) {
+	g.mu.Lock()
+	if g.loaded {
+		labels := append([]gmailLabel(nil), g.labels...)
+		g.mu.Unlock()
+		return labels, nil
+	}
+	g.mu.Unlock()
+	token, err := tokenOf(ctx, g.Access)
+	if err != nil {
+		return nil, err
 	}
 	raw, status, err := call(ctx, g.HTTP, "gmail", token, http.MethodGet, g.base()+"/labels", nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if status != http.StatusOK {
-		return "", &statusError{name: "gmail", status: status}
+		return nil, &statusError{name: "gmail", status: status}
 	}
 	var listed struct {
 		Labels []struct {
@@ -217,21 +295,38 @@ func (g *Gmail) lookupLabel(ctx context.Context, name string) (string, error) {
 		} `json:"labels"`
 	}
 	if err := json.Unmarshal(raw, &listed); err != nil {
-		return "", errors.New("gmail: response was not a label list")
+		return nil, errors.New("gmail: response was not a label list")
 	}
-	var found string
+	labels := make([]gmailLabel, 0, len(listed.Labels))
 	for _, label := range listed.Labels {
-		if label.Name == name {
-			if found != "" {
-				return "", errors.New("gmail: more than one label has that name")
-			}
-			found = label.ID
+		if label.ID == "" || label.Name == "" {
+			continue
 		}
+		labels = append(labels, gmailLabel{ID: label.ID, Name: label.Name})
 	}
-	if found == "" {
-		return "", errLabelMissing
+	g.mu.Lock()
+	if !g.loaded {
+		g.labels = labels
+		g.loaded = true
+	} else {
+		labels = append([]gmailLabel(nil), g.labels...)
 	}
-	return found, nil
+	g.mu.Unlock()
+	return labels, nil
+}
+
+func (g *Gmail) rememberLabel(name, id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.labels = append(g.labels, gmailLabel{ID: id, Name: name})
+	g.loaded = true
+}
+
+func (g *Gmail) forgetLabels() {
+	g.mu.Lock()
+	g.labels = nil
+	g.loaded = false
+	g.mu.Unlock()
 }
 
 func (g *Gmail) modify(ctx context.Context, id string, add, remove []string) error {

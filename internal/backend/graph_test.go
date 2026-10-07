@@ -25,7 +25,10 @@ func TestGraphMovePostsDestinationAndSkipsProtectedFolders(t *testing.T) {
 			if !strings.Contains(r.URL.Query().Get("$filter"), "internetMessageId eq '<a@b.c>'") {
 				t.Errorf("filter %s", r.URL.RawQuery)
 			}
-			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"inbox-id"}]}`)
+			if !strings.Contains(r.URL.Query().Get("$select"), "internetMessageId") {
+				t.Errorf("select %s", r.URL.RawQuery)
+			}
+			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"inbox-id","internetMessageId":"<a@b.c>"}]}`)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/mailFolders/") && !strings.Contains(r.URL.Path, "child"):
 			name := strings.TrimPrefix(r.URL.Path, "/mailFolders/")
 			_, _ = io.WriteString(w, `{"id":"`+name+`-id"}`)
@@ -82,7 +85,7 @@ func TestGraphRefusesDeletedMail(t *testing.T) {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
 		if r.URL.Path == "/messages" {
-			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"deleteditems-id"}]}`)
+			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"deleteditems-id","internetMessageId":"<a@b.c>"}]}`)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/mailFolders/") {
@@ -96,6 +99,46 @@ func TestGraphRefusesDeletedMail(t *testing.T) {
 	client := NewGraph(func(context.Context) (string, error) { return "tok", nil }, srv.URL, srv.Client())
 	err := client.MoveMessage(t.Context(), "<a@b.c>", "INBOX", "Work")
 	if err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Fatal(err)
+	}
+}
+
+func TestGraphLeavesMailOutsideTheSourceFolder(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			t.Errorf("moved mail that is not in the source folder")
+		}
+		switch {
+		case r.URL.Path == "/messages":
+			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"archive-id","internetMessageId":"<a@b.c>"}]}`)
+		case strings.HasPrefix(r.URL.Path, "/mailFolders/"):
+			name := strings.TrimPrefix(r.URL.Path, "/mailFolders/")
+			_, _ = io.WriteString(w, `{"id":"`+name+`-id"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := NewGraph(func(context.Context) (string, error) { return "tok", nil }, srv.URL, srv.Client())
+	err := client.MoveMessage(t.Context(), "<a@b.c>", "INBOX", "Work")
+	if err == nil || !strings.Contains(err.Error(), "not in that folder") {
+		t.Fatal(err)
+	}
+}
+
+func TestGraphRefusesAMismatchedMessageID(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/messages" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"inbox-id","internetMessageId":"<other@b.c>"}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := NewGraph(func(context.Context) (string, error) { return "tok", nil }, srv.URL, srv.Client())
+	err := client.MoveMessage(t.Context(), "<a@b.c>", "INBOX", "Work")
+	if err == nil || !strings.Contains(err.Error(), "confirm") {
 		t.Fatal(err)
 	}
 }
@@ -150,7 +193,7 @@ func graphServer(t *testing.T, extra func(*http.Request)) *httptest.Server {
 		}
 		switch {
 		case r.URL.Path == "/messages" && r.Method == http.MethodGet:
-			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"inbox-id"}]}`)
+			_, _ = io.WriteString(w, `{"value":[{"id":"AAMk","parentFolderId":"work-id","internetMessageId":"<a@b.c>"}]}`)
 		case strings.HasPrefix(r.URL.Path, "/mailFolders/") && r.Method == http.MethodGet:
 			name := strings.TrimPrefix(r.URL.Path, "/mailFolders/")
 			_, _ = io.WriteString(w, `{"id":"`+name+`-id"}`)

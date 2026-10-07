@@ -121,6 +121,57 @@ func TestGmailLeavesTrashAndDrafts(t *testing.T) {
 	}
 }
 
+func TestGmailLeavesMailThatIsNotInTheSourceFolder(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Path == "/messages" {
+			_, _ = io.WriteString(w, `{"messages":[{"id":"msg-1"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"msg-1","labelIds":["Label_9"]}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := NewGmail(func(context.Context) (string, error) { return "tok", nil }, srv.URL, srv.Client())
+	err := client.MoveMessage(t.Context(), "<a@b.c>", "INBOX", "Work")
+	if err == nil || !strings.Contains(err.Error(), "not in that folder") {
+		t.Fatal(err)
+	}
+}
+
+func TestGmailListsLabelsOnce(t *testing.T) {
+	t.Parallel()
+	lists := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/messages" && r.Method == http.MethodGet:
+			_, _ = io.WriteString(w, `{"messages":[{"id":"msg-1"}]}`)
+		case r.URL.Path == "/messages/msg-1" && r.Method == http.MethodGet:
+			_, _ = io.WriteString(w, `{"id":"msg-1","labelIds":["INBOX"]}`)
+		case r.URL.Path == "/labels":
+			lists++
+			_, _ = io.WriteString(w, `{"labels":[{"id":"Label_1","name":"Work"}]}`)
+		case r.URL.Path == "/messages/msg-1/modify":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := NewGmail(func(context.Context) (string, error) { return "tok", nil }, srv.URL, srv.Client())
+	if err := client.MoveMessage(t.Context(), "<a@b.c>", "INBOX", "Work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.MoveMessage(t.Context(), "<a@b.c>", "INBOX", "Work"); err != nil {
+		t.Fatal(err)
+	}
+	if lists != 1 {
+		t.Fatalf("label lists = %d", lists)
+	}
+}
+
 func TestGmailRefusesTrashDestination(t *testing.T) {
 	t.Parallel()
 	client := NewGmail(func(context.Context) (string, error) { return "tok", nil }, "http://127.0.0.1", nil)

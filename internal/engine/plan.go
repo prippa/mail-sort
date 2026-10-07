@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	// DefaultWorkers is the classification pool size.
-	DefaultWorkers = 4
+	// DefaultWorkers is how many messages are classified at once.
+	// It matches the default Jev pace so a plan is not stuck behind a handful of calls.
+	DefaultWorkers = 80
+	// MaxWorkers is the upper bound for --workers.
+	MaxWorkers = 80
 	// DefaultMaxMoves is the filing cap for one apply.
 	DefaultMaxMoves = 200
 	// DefaultLimit is how many newest messages a plan reads.

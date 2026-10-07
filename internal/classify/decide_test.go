@@ -190,4 +190,14 @@ func TestUrgentMoveStaysInInbox(t *testing.T) {
 	if !labeled.Urgent || labeled.Action != "label" || labeled.Folder != "Work" {
 		t.Fatalf("label=%+v", labeled)
 	}
+
+	provider.result.Confidence = 0.2
+	provider.calls = 0
+	uncertain, err := Classify(t.Context(), Input{Message: message.Message{Subject: "Need this today"}}, labelSet, []Provider{provider}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uncertain.Urgent || uncertain.Action != "none" || uncertain.Folder != "" || uncertain.Category != "work" {
+		t.Fatalf("uncertain=%+v", uncertain)
+	}
 }

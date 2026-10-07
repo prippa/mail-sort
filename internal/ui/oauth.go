@@ -96,6 +96,7 @@ func (s *Server) connectOAuth(ctx context.Context, profile config.Profile, accou
 	if err != nil {
 		return nil, err
 	}
+	oAccount = s.withGoogleSecret(oAccount, profile.Name)
 	source, err := oauth.NewSource(oAccount, refresh, func(next string) error {
 		return vault.Set(secrets.RefreshAccount(profile.Name), next)
 	})
@@ -157,6 +158,7 @@ func (s *Server) startOAuth(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
 		return
 	}
+	oAccount = s.withGoogleSecret(oAccount, profile.Name)
 	if body.Graph {
 		if profile.Provider != "microsoft" && profile.Auth != "oauth_microsoft" {
 			s.fail(w, http.StatusBadRequest, "config: field \"backend\" needs Microsoft sign-in")
@@ -335,6 +337,69 @@ type keyBody struct {
 	KeyEnv   string `json:"key_env"`
 	Provider string `json:"provider"`
 	Value    string `json:"value"`
+}
+
+func (s *Server) withGoogleSecret(account oauth.Account, name string) oauth.Account {
+	if account.Auth != "oauth_google" || strings.TrimSpace(account.ClientSecret) != "" {
+		return account
+	}
+	vault, err := s.secretStore()
+	if err != nil {
+		return account
+	}
+	stored, err := vault.Get(secrets.GoogleClientAccount(name))
+	if err != nil {
+		return account
+	}
+	return account.UseStoredClientSecret(stored)
+}
+
+type clientSecretBody struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func (s *Server) saveGoogleClientSecret(w http.ResponseWriter, r *http.Request) {
+	var body clientSecretBody
+	if !s.readJSON(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	value := strings.TrimSpace(body.Value)
+	cfg, err := s.loadConfig(r.Context())
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
+		return
+	}
+	profile, err := findProfile(cfg, name)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
+		return
+	}
+	if profile.Auth != "oauth_google" {
+		s.fail(w, http.StatusBadRequest, "config: this account does not use Google sign-in")
+		return
+	}
+	vault, err := s.secretStore()
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, redactSecret(err.Error(), value))
+		return
+	}
+	s.withoutLock(func() {
+		err = vault.Set(secrets.GoogleClientAccount(name), value)
+	})
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, redactSecret(err.Error(), value))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"client_secret_set": true})
+}
+
+func redactSecret(msg, secret string) string {
+	if secret != "" && len(secret) >= 4 {
+		msg = strings.ReplaceAll(msg, secret, "[redacted]")
+	}
+	return msg
 }
 
 func (s *Server) saveClassifierKey(w http.ResponseWriter, r *http.Request) {

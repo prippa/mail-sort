@@ -23,8 +23,12 @@ import (
 )
 
 const (
-	defaultJevModel  = "jev-1.13.0"
-	defaultJevBase   = "https://api.typesafe.ai"
+	defaultJevModel = "jev-1.13.0"
+	defaultJevBase  = "https://api.typesafe.ai"
+	// defaultJevRPS is the pace when a profile does not set rps. Jev allows
+	// about 80 requests a second; a lower plan can set rps and burst.
+	defaultJevRPS    = 80
+	defaultJevBurst  = 80
 	defaultAnthropic = "https://api.anthropic.com"
 	jevMinConfidence = 0.80
 	llmMinConfidence = 0.70
@@ -57,13 +61,20 @@ var (
 
 	errInvalidResponse = errors.New("classify: provider response is invalid")
 
-	defaultHTTP = &http.Client{
-		Timeout: 30 * time.Second,
+	defaultHTTP = newClassifierHTTP()
+)
+
+func newClassifierHTTP() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = defaultJevBurst
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-)
+}
 
 // KeyError names the environment variable that was empty.
 type KeyError struct {
@@ -163,11 +174,14 @@ func Providers(specs []config.Classifier, lookup func(string) (string, bool), lo
 			opts.urgentMin = jevUrgentMin(spec)
 			rps, burst := spec.RPS, spec.Burst
 			if rps == 0 && burst == 0 {
-				rps, burst = 2, 4
+				rps, burst = defaultJevRPS, defaultJevBurst
 			}
 			if rps > 0 {
 				if burst == 0 {
-					burst = 4
+					burst = int(rps)
+				}
+				if burst < 1 {
+					burst = 1
 				}
 				opts.limit = newBucket(rps, burst)
 			}
@@ -358,7 +372,7 @@ func readNoul(raw json.RawMessage) (float64, bool, error) {
 	if answer.Type != "" && answer.Type != "noul" {
 		return 0, false, errInvalidResponse
 	}
-	if *answer.Noul < 0 || *answer.Noul > 1 {
+	if math.IsNaN(*answer.Noul) || math.IsInf(*answer.Noul, 0) || *answer.Noul < 0 || *answer.Noul > 1 {
 		return 0, false, errInvalidResponse
 	}
 	return *answer.Noul, true, nil

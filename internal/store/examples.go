@@ -39,18 +39,22 @@ func (db *DB) examples(ctx context.Context, profile string, limit int, labeled b
 	if limit <= 0 {
 		limit = 40
 	}
-	query := `SELECT run_rows.id, run_rows.uid, run_rows.subject, run_rows.from_addr,
-		run_rows.model_category, run_rows.category, run_rows.confidence, run_rows.status, run_rows.overridden
-		FROM run_rows JOIN runs ON runs.id = run_rows.run_id
-		WHERE runs.profile = ? AND run_rows.model_category != ''`
-	if labeled {
-		query += ` AND (run_rows.overridden = 1 OR run_rows.status = ?)`
-	}
-	query += ` ORDER BY run_rows.id DESC LIMIT ?`
+	where := `runs.profile = ? AND run_rows.model_category != ''`
 	args := []any{profile}
 	if labeled {
+		where += ` AND (run_rows.overridden = 1 OR run_rows.status = ?)`
 		args = append(args, RowApplied)
 	}
+	// Newest row per UID. A later dry run must not count the same message twice.
+	query := `SELECT id, uid, subject, from_addr, model_category, category, confidence, status, overridden
+		FROM (
+			SELECT run_rows.id, run_rows.uid, run_rows.subject, run_rows.from_addr,
+				run_rows.model_category, run_rows.category, run_rows.confidence, run_rows.status, run_rows.overridden,
+				ROW_NUMBER() OVER (PARTITION BY run_rows.uid ORDER BY run_rows.id DESC) AS rn
+			FROM run_rows JOIN runs ON runs.id = run_rows.run_id
+			WHERE ` + where + `
+		) WHERE rn = 1
+		ORDER BY id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := db.db.QueryContext(ctx, query, args...)
 	if err != nil {

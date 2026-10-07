@@ -183,6 +183,35 @@ func TestPredictedCategorySurvivesOverride(t *testing.T) {
 	}
 }
 
+func TestExamplesKeepTheNewestRowPerUID(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t, filepath.Join(t.TempDir(), "mailsorter.db"))
+	if _, err := db.CreateRun(ctx, Run{Profile: "Work", Mailbox: "INBOX", UIDValidity: 3}, []Row{
+		{UID: 7, Subject: "First", From: "Ada <ada@example.com>", Category: "work", Status: RowPending, Confidence: 0.4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpdatePending(ctx, "Work", 7, "personal", "move", "Personal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateRun(ctx, Run{Profile: "Work", Mailbox: "INBOX", UIDValidity: 3}, []Row{
+		{UID: 7, Subject: "Second", From: "Ada <ada@example.com>", Category: "newsletters", Status: RowPending, Confidence: 0.99},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpdatePending(ctx, "Work", 7, "travel", "move", "Travel"); err != nil {
+		t.Fatal(err)
+	}
+	labeled, err := db.LabeledExamples(ctx, "Work", 10)
+	if err != nil || len(labeled) != 1 || labeled[0].Predicted != "newsletters" || labeled[0].Category != "travel" {
+		t.Fatalf("%+v %v", labeled, err)
+	}
+	recent, err := db.RecentExamples(ctx, "Work", 10)
+	if err != nil || len(recent) != 1 || recent[0].Subject != "Second" {
+		t.Fatalf("%+v %v", recent, err)
+	}
+}
+
 func TestOldDatabaseGainsModelCategory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	raw, err := sql.Open("sqlite", path)

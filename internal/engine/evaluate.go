@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"math"
 
 	"github.com/prippa/mail-sort/internal/classify"
 	"github.com/prippa/mail-sort/internal/store"
@@ -32,7 +33,7 @@ func SuggestThreshold(examples []store.Example) Suggestion {
 		if item.Predicted == "" || item.Category == "" {
 			continue
 		}
-		if item.Confidence < 0 || item.Confidence > 1 {
+		if math.IsNaN(item.Confidence) || item.Confidence < 0 || item.Confidence > 1 {
 			continue
 		}
 		labeled = append(labeled, item)

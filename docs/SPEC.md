@@ -33,7 +33,7 @@ Approved with the phase 0 plan:
 - No macOS build.
 - OAuth client ids are empty in source. `-ldflags` may set `internal/buildinfo.DefaultGoogleClientID` and `DefaultMicrosoftClientID`.
 - Cost uses prices the user types. The models page currently lists $0.042 per million input tokens and free output; that is a hint, not a built-in rate.
-- Default Jev client rate is 2 requests/s, burst 4, user-adjustable. Honor `Retry-After` on 429 and 529, then exponential backoff with jitter.
+- Default Jev client rate is 80 requests/s, burst 80, user-adjustable. The dry run classifies up to 80 messages at once. Honor `Retry-After` on 429 and 529, then exponential backoff with jitter.
 - At most 253 user categories, so `needs_review` and `keep_in_inbox` fit in Jev's 255-option Choice limit.
 - Config schema rejects unknown fields so a secret cannot hide under a typo. The schema grows with each phase.
 - YAML anchors and aliases are rejected.
@@ -122,8 +122,8 @@ classifiers:
     # key_env defaults to TYPESAFE_API_KEY for jev
     min_confidence: 0.8
     # min_margin: 0.1
-    rps: 2
-    burst: 4
+    rps: 80
+    burst: 80
     # price_input and price_output are dollars per million tokens, optional
   - provider: openai_compatible
     model: your-model-id # required; this program does not pick one
@@ -145,10 +145,11 @@ classifiers:
 - `TYPESAFE_API_KEY`
 - `MAIL_SORTER_MASTER_PASSWORD`
 - `MAIL_SORTER_PASSWORD_` plus the profile-specific suffix stored in `password_env`
+- `MAIL_SORTER_GOOGLE_CLIENT_SECRET` — the Desktop client secret, sent only on the token request. Google's published request lists it as optional with PKCE. The live token endpoint rejects the exchange when the Cloud Console client has a secret and the request omits it. The account page can store the same value in the keyring. The environment variable overrides the stored value.
 
 The keyring service name is `mailsorter`. Windows Credential Manager limits a secret to 2560 bytes (`go-keyring` documents this). Persist the refresh token only. Access tokens stay in memory. If Secret Service is missing on Linux, use an encrypted file (argon2id + XChaCha20-Poly1305) and require the master-password variable for headless runs.
 
-Do not add config keys whose names contain `password`, `secret`, `token`, or `bearer`, except `password_env`. `client_secret` is rejected. A public PKCE client has no client secret.
+Do not add config keys whose names contain `password`, `secret`, `token`, or `bearer`, except `password_env`. `client_secret` is rejected in YAML. The Google Desktop secret, when the token endpoint requires it, comes from `MAIL_SORTER_GOOGLE_CLIENT_SECRET`.
 
 ## Dependencies
 
@@ -203,7 +204,7 @@ On `AUTHENTICATE` failure, show a provider-specific hint. For Gmail, say that an
 
 Bring-your-own client. Authorization code plus PKCE, loopback redirect on a random free port, system browser, and the URL printed when there is no browser. Microsoft also has the device-code flow. Google is loopback only: its device flow does not cover the Gmail scope.
 
-Google: `access_type=offline` and `prompt=consent`. The consent screen must be "In production" (unverified is fine for personal use). Refresh tokens from "Testing" expire after 7 days. On `invalid_grant`, say to re-authorize.
+Google: `access_type=offline` and `prompt=consent`. The consent screen must be "In production" (unverified is fine for personal use). Refresh tokens from "Testing" expire after 7 days. On `invalid_grant`, say to re-authorize. Send `MAIL_SORTER_GOOGLE_CLIENT_SECRET` on the token request when it is set. PKCE stays on either way.
 
 Microsoft: tenant is `common`, `organizations`, `consumers`, or a tenant id. Public client. Redirect `http://localhost`.
 
@@ -239,7 +240,7 @@ Rules run before any model and can match from, domain, to (including plus-addres
 
 The folder question is a Choice. `state` carries `from`, `to`, `subject`, `date`, `is_bulk`, `attachments`, and `body`. The question key is `folder`. Instructions tell the model to judge by content. Criteria are the category descriptions plus `needs_review` ("Unclear, ambiguous, or none of the above"). `keep_in_inbox` is also always an option.
 
-Jev also sends a Noul question, key `urgent`, unless `urgent: false`. Instructions ask whether the message is time-sensitive. Criteria are `true` and `false` sentences in English. The response `answers.urgent` is `{type, noul}`. `noul` is a probability from 0 to 1 and has no confidence field. The default cutoff is 0.80, a placeholder like the Choice cutoff; `urgent_min` replaces it. At or above the cutoff, a `move` stays in the inbox (`action: none`) and the dry run says why. A `label` is still applied. Rules still win, because they run before the model. The cache key changes when the question is turned on. Changing the cutoff reuses a stored probability.
+Jev also sends a Noul question, key `urgent`, unless `urgent: false`. Instructions ask whether the message is time-sensitive. Criteria are `true` and `false` sentences in English. The response `answers.urgent` is `{type, noul}`. `noul` is a probability from 0 to 1 and has no confidence field. The default cutoff is 0.80, a placeholder like the Choice cutoff; `urgent_min` replaces it. At or above the cutoff, a `move` stays in the inbox (`action: none`) and the dry run says why. A `label` is still applied when its confidence clears the gate. A low-confidence label is not applied, and the message is not moved to Needs review. Rules still win, because they run before the model. A live `POST /v1/systemone` returned `answers.folder` (`type` `choice`, `choice`, `confidence`) and `answers.urgent` (`type` `noul`, `noul`). The cache key changes when the question is turned on. Changing the cutoff reuses a stored probability.
 
 The response `answers.folder` is `{type, choice, probabilities, confidence}` plus `usage` `{input_tokens, output_tokens}`. Store the response `model` id with the decision. Default request model is `jev-1.13.0`. `jev-latest` and `jev-preview` may be selected; the UI warns that aliases move. As of the models page both aliases point at `jev-1.13.0`.
 
@@ -330,7 +331,6 @@ These stay `// VERIFY` until the cited source is read in the phase that implemen
 - Live-server `UID MOVE` and `UID EXPUNGE`. The in-memory server covers MOVE, and COPY plus STORE `\Deleted` plus UID EXPUNGE of one UID, including a second `\Deleted` message that must stay. A dynamic COPYUID has no numeric UID here; the fallback is a Message-ID search. `Authenticate(sasl.Client) error` is the pinned signature. The XOAUTH2 initial response is tested against Microsoft's documented example. Live Gmail and Microsoft sign-in were not used.
 - Whether a Google Desktop client accepts an unregistered random `http://127.0.0.1` port, and whether Entra treats a registered `http://localhost` as matching `http://localhost:<port>`. If the provider reports a redirect mismatch, add the printed address and sign in again.
 - Live IMAP IDLE against Gmail or Microsoft. The in-memory server covers an IDLE wake and the poll fallback. The pinned `go-imap` client restarts IDLE every 28 minutes.
-- A live Jev, OpenAI, or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
+- A live OpenAI or Anthropic call. The adapters follow the published request shapes and are tested with a local HTTP server. OpenAI usage is read from `prompt_tokens` / `completion_tokens`, and also from `input_tokens` / `output_tokens` when a proxy sends those names.
 - Anthropic models that reject `tool_choice` type `tool` (the primer names Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1). The client retries a 400 without the force, then once without `strict`. That fallback was not verified against a live model.
-- A live Jev Noul answer. The request follows the published `noul` question (`instructions`, criteria `true` and `false`) and reads `answers.urgent.noul`. The 0.80 cutoff is a product placeholder. The local HTTP test covers the body and the inbox hold.
 - A live Gmail `messages.modify` and a live Graph `message: move`. The clients follow the published methods and are tested with a local HTTP server. `format=minimal` on `messages.get` was not re-read. The Graph scope string `https://graph.microsoft.com/Mail.ReadWrite` was not sent to a live authorize endpoint. The permission name `Mail.ReadWrite` is the least-privileged delegated permission on the move and copy pages.

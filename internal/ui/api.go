@@ -17,6 +17,7 @@ import (
 	"github.com/prippa/mail-sort/internal/i18n"
 	"github.com/prippa/mail-sort/internal/mail"
 	"github.com/prippa/mail-sort/internal/message"
+	"github.com/prippa/mail-sort/internal/oauth"
 	"github.com/prippa/mail-sort/internal/secrets"
 	"github.com/prippa/mail-sort/internal/store"
 )
@@ -67,29 +68,45 @@ func (s *Server) profileViews(ctx context.Context, cfg config.Config) []map[stri
 			confirmed = false
 		}
 		out = append(out, map[string]any{
-			"name":            profile.Name,
-			"provider":        profile.Provider,
-			"host":            profile.Host,
-			"host_id":         profile.HostID,
-			"port":            profile.Port,
-			"security":        profile.Security,
-			"username":        profile.Username,
-			"email":           profile.Email,
-			"password_env":    profile.PasswordEnv,
-			"password_set":    lookupSet(s.lookup, profile.PasswordEnv),
-			"auth":            profile.Auth,
-			"client_id":       profile.ClientID,
-			"tenant":          profile.Tenant,
-			"device_code":     profile.DeviceCode,
-			"signed_in":       s.signedIn(profile.Name),
-			"discover":        profile.Discover,
-			"max_chars":       profile.MaxChars,
-			"confirmed":       confirmed,
-			"backend":         filingBackend(profile.Backend),
-			"graph_signed_in": s.graphSignedIn(profile.Name),
+			"name":              profile.Name,
+			"provider":          profile.Provider,
+			"host":              profile.Host,
+			"host_id":           profile.HostID,
+			"port":              profile.Port,
+			"security":          profile.Security,
+			"username":          profile.Username,
+			"email":             profile.Email,
+			"password_env":      profile.PasswordEnv,
+			"password_set":      lookupSet(s.lookup, profile.PasswordEnv),
+			"auth":              profile.Auth,
+			"client_id":         profile.ClientID,
+			"client_secret_set": s.googleSecretSet(profile),
+			"tenant":            profile.Tenant,
+			"device_code":       profile.DeviceCode,
+			"signed_in":         s.signedIn(profile.Name),
+			"discover":          profile.Discover,
+			"max_chars":         profile.MaxChars,
+			"confirmed":         confirmed,
+			"backend":           filingBackend(profile.Backend),
+			"graph_signed_in":   s.graphSignedIn(profile.Name),
 		})
 	}
 	return out
+}
+
+func (s *Server) googleSecretSet(profile config.Profile) bool {
+	if profile.Auth != "oauth_google" {
+		return false
+	}
+	if lookupSet(s.lookup, oauth.EnvGoogleClientSecret) {
+		return true
+	}
+	vault, err := s.secretStore()
+	if err != nil {
+		return false
+	}
+	value, err := vault.Get(secrets.GoogleClientAccount(profile.Name))
+	return err == nil && strings.TrimSpace(value) != ""
 }
 
 func filingBackend(name string) string {
@@ -342,6 +359,7 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if vault, err := s.secretStore(); err == nil {
 		_ = vault.Delete(secrets.RefreshAccount(name))
+		_ = vault.Delete(secrets.GoogleClientAccount(name))
 	}
 	next := cfg.Profiles[:0]
 	for _, profile := range cfg.Profiles {
@@ -870,7 +888,9 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
+		msg := s.publicError(cfg, err)
+		s.log.Info("ui plan failed", slog.String("profile", profile.Name), slog.Int("limit", body.Limit), slog.String("error", msg))
+		s.fail(w, http.StatusBadRequest, msg)
 		return
 	}
 	s.log.Info("ui plan", slog.String("profile", profile.Name), slog.Int("rows", len(report.Rows)), slog.Int("errors", report.Errors), slog.Duration("latency", time.Since(started)))

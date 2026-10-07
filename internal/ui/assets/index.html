@@ -48,6 +48,12 @@
       <div x-show="offersOAuth()">
         <p class="hint" x-text="text('wizard.oauth_note')"></p>
         <label><span x-text="text('wizard.client_id')"></span><input x-model="draft.client_id" autocomplete="off"></label>
+        <div x-show="draft.provider === 'gmail' && !draft.use_password">
+          <p class="hint" x-show="!clientSecretSet(draft.name)" x-text="text('accounts.client_secret_missing')"></p>
+          <p class="hint" x-show="clientSecretSet(draft.name)" x-text="text('accounts.client_secret_set')"></p>
+          <label><span x-text="text('accounts.client_secret')"></span><input type="password" x-model="draft.client_secret" autocomplete="off"></label>
+          <button type="button" x-on:click="saveClientSecret(draft.name, draft.client_secret)" x-text="text('accounts.client_secret_save')"></button>
+        </div>
         <label x-show="draft.provider === 'microsoft'"><span x-text="text('wizard.tenant')"></span><input x-model="draft.tenant" autocomplete="off"></label>
         <label class="check" x-show="draft.provider === 'microsoft'"><input type="checkbox" x-model="draft.device_code"><span x-text="text('wizard.device')"></span></label>
         <label x-show="(draft.provider === 'gmail' || draft.provider === 'microsoft') && !draft.use_password"><span x-text="text('accounts.backend')"></span>
@@ -133,6 +139,12 @@
         <p x-show="profile.auth === 'password' && !profile.password_set" x-text="text('accounts.password_missing')"></p>
         <p x-show="profile.auth !== 'password' && profile.signed_in" x-text="text('accounts.signed_in')"></p>
         <p x-show="profile.auth !== 'password' && !profile.signed_in" x-text="text('accounts.not_signed_in')"></p>
+        <div x-show="profile.provider === 'gmail' && profile.auth !== 'password'">
+          <p x-show="profile.client_secret_set" x-text="text('accounts.client_secret_set')"></p>
+          <p x-show="!profile.client_secret_set" x-text="text('accounts.client_secret_missing')"></p>
+          <label><span x-text="text('accounts.client_secret')"></span><input type="password" x-model="profile.client_secret_value" autocomplete="off"></label>
+          <button type="button" x-on:click="saveClientSecret(profile.name, profile.client_secret_value)" x-text="text('accounts.client_secret_save')"></button>
+        </div>
         <div x-show="profile.provider === 'gmail' || profile.provider === 'microsoft'">
           <label><span x-text="text('accounts.backend')"></span>
             <select x-model="profile.backend">
@@ -262,27 +274,50 @@
 
   <section x-show="screen === 'run'">
     <h2 x-text="text('run.title')"></h2>
+    <ol class="steps">
+      <li x-text="text('run.step_plan')"></li>
+      <li x-text="text('run.step_confirm')"></li>
+      <li x-text="text('run.step_apply')"></li>
+    </ol>
     <label><span x-text="text('run.profile')"></span>
-      <select x-model="runForm.profile">
+      <select x-model="runForm.profile" x-bind:disabled="!!busy">
         <template x-for="profile in boot.profiles" x-bind:key="profile.name">
           <option x-bind:value="profile.name" x-text="profile.name"></option>
         </template>
       </select>
     </label>
-    <label><span x-text="text('run.folder')"></span><input x-model="runForm.folder" autocomplete="off"></label>
-    <label><span x-text="text('run.limit')"></span><input x-model="runForm.limit" inputmode="numeric" autocomplete="off"></label>
-    <label><span x-text="text('run.since')"></span><input x-model="runForm.since" placeholder="YYYY-MM-DD" autocomplete="off"></label>
-    <label class="check"><input type="checkbox" x-model="runForm.unread"><span x-text="text('run.unread')"></span></label>
-    <label class="check"><input type="checkbox" x-model="runForm.include_flagged"><span x-text="text('run.flagged')"></span></label>
-    <label class="check"><input type="checkbox" x-model="runForm.include_drafts"><span x-text="text('run.drafts')"></span></label>
-    <label class="check"><input type="checkbox" x-model="runForm.copy_only"><span x-text="text('run.copy_only')"></span></label>
+    <label><span x-text="text('run.folder')"></span><input x-model="runForm.folder" autocomplete="off" x-bind:disabled="!!busy"></label>
+    <label><span x-text="text('run.limit')"></span><input x-model="runForm.limit" inputmode="numeric" autocomplete="off" x-bind:disabled="!!busy"></label>
+    <p class="hint" x-text="text('run.limit_note')"></p>
+    <label><span x-text="text('run.since')"></span><input x-model="runForm.since" placeholder="YYYY-MM-DD" autocomplete="off" x-bind:disabled="!!busy"></label>
+    <label class="check"><input type="checkbox" x-model="runForm.unread" x-bind:disabled="!!busy"><span x-text="text('run.unread')"></span></label>
+    <label class="check"><input type="checkbox" x-model="runForm.include_flagged" x-bind:disabled="!!busy"><span x-text="text('run.flagged')"></span></label>
+    <label class="check"><input type="checkbox" x-model="runForm.include_drafts" x-bind:disabled="!!busy"><span x-text="text('run.drafts')"></span></label>
+    <label class="check"><input type="checkbox" x-model="runForm.copy_only" x-bind:disabled="!!busy"><span x-text="text('run.copy_only')"></span></label>
     <div class="row">
-      <button type="button" class="primary" x-on:click="plan()" x-text="text('run.plan')"></button>
-      <button type="button" x-on:click="confirmRun()" x-text="text('run.confirm')"></button>
-      <button type="button" x-on:click="applyRun()" x-text="text('run.apply')"></button>
-      <button type="button" x-on:click="undoRun()" x-text="text('run.undo')"></button>
+      <button type="button" class="with-spin" x-bind:class="nextRun() === 'plan' ? 'primary' : ''" x-bind:disabled="!!busy" x-on:click="plan()">
+        <span class="spinner" x-show="pending === 'plan'"></span>
+        <span x-text="text('run.plan')"></span>
+      </button>
+      <button type="button" class="with-spin" x-bind:class="nextRun() === 'confirm' ? 'primary' : ''" x-bind:disabled="!!busy || !canConfirm()" x-on:click="confirmRun()">
+        <span class="spinner" x-show="pending === 'confirm'"></span>
+        <span x-text="text('run.confirm')"></span>
+      </button>
+      <button type="button" class="with-spin" x-bind:class="nextRun() === 'apply' ? 'primary' : ''" x-bind:disabled="!!busy || !canApply()" x-on:click="applyRun()">
+        <span class="spinner" x-show="pending === 'apply'"></span>
+        <span x-text="text('run.apply')"></span>
+      </button>
+      <button type="button" class="with-spin" x-bind:disabled="!!busy || !canUndo()" x-on:click="undoRun()">
+        <span class="spinner" x-show="pending === 'undo'"></span>
+        <span x-text="text('run.undo')"></span>
+      </button>
     </div>
-    <p x-show="report.note_key" x-text="text(report.note_key)"></p>
+    <p class="working" x-show="busy && pending" role="status">
+      <span class="spinner"></span>
+      <span x-text="runBusyText()"></span>
+    </p>
+    <p class="note" x-show="!busy && runNote" x-text="runNote"></p>
+    <p class="hint" x-show="!busy && !runNote && (!report.rows || !report.rows.length)" x-text="text('run.empty')"></p>
     <table x-show="report.rows && report.rows.length">
       <thead>
         <tr>
@@ -308,7 +343,7 @@
       </tbody>
     </table>
     <div class="row">
-      <label><span x-text="text('run.uid')"></span><input x-model="overrideUID" inputmode="numeric" autocomplete="off"></label>
+      <label><span x-text="text('run.uid')"></span><input x-model="overrideUID" inputmode="numeric" autocomplete="off" x-bind:disabled="!!busy"></label>
       <label><span x-text="text('run.category')"></span>
         <select x-model="overrideCategory">
           <template x-for="cat in boot.categories" x-bind:key="cat.key">
@@ -316,7 +351,10 @@
           </template>
         </select>
       </label>
-      <button type="button" x-on:click="overrideRow()" x-text="text('run.override')"></button>
+      <button type="button" class="with-spin" x-bind:disabled="!!busy" x-on:click="overrideRow()">
+        <span class="spinner" x-show="pending === 'override'"></span>
+        <span x-text="text('run.override')"></span>
+      </button>
     </div>
   </section>
 

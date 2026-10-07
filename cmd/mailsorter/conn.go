@@ -192,6 +192,9 @@ func connectAccount(ctx context.Context, profile config.Profile, account mail.Ac
 	if err != nil {
 		return nil, err
 	}
+	if stored, getErr := store.Get(secrets.GoogleClientAccount(profile.Name)); getErr == nil {
+		oAccount = oAccount.UseStoredClientSecret(stored)
+	}
 	source, err := oauth.NewSource(oAccount, refresh, func(next string) error {
 		return store.Set(secrets.RefreshAccount(profile.Name), next)
 	})

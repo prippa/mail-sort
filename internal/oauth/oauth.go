@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,12 @@ const (
 	OfflineAccess = "offline_access"
 
 	refreshEarly = 5 * time.Minute
+
+	// EnvGoogleClientSecret is the Desktop client secret. Google's published
+	// token request lists it as optional with PKCE, but the token endpoint
+	// rejects an exchange that omits it when the client has a secret in
+	// Cloud Console. The value stays in the environment, never in YAML.
+	EnvGoogleClientSecret = "MAIL_SORTER_GOOGLE_CLIENT_SECRET"
 )
 
 var (
@@ -49,15 +56,21 @@ var (
 	ErrReauth = errors.New("oauth: the saved sign-in is no longer valid. Sign in again")
 	// ErrGoogleDevice means a device-code request was made for Gmail.
 	ErrGoogleDevice = errors.New("oauth: Google sign-in uses a browser on this computer. The device flow does not cover the Gmail scope")
+	// ErrGoogleClientSecret means the token endpoint refused a PKCE exchange
+	// that did not include the Desktop client secret.
+	ErrGoogleClientSecret = errors.New("oauth: Google refused the token exchange because this desktop client requires its client secret. Save it on the account page, or set MAIL_SORTER_GOOGLE_CLIENT_SECRET, and sign in again")
 )
 
 // Account is the public OAuth client for one profile.
 type Account struct {
 	Auth     string
 	ClientID string
-	Tenant   string
-	Email    string
-	Device   bool
+	// ClientSecret is sent on the token request when set. Google Desktop
+	// clients need it even with PKCE. It is not a profile field.
+	ClientSecret string
+	Tenant       string
+	Email        string
+	Device       bool
 	// Graph asks for Mail.ReadWrite instead of the IMAP scope.
 	Graph bool
 	// Endpoint overrides the provider URLs. Tests set it. Production leaves it nil.
@@ -74,6 +87,9 @@ func FromProfile(profile config.Profile) (Account, error) {
 		Tenant:   strings.TrimSpace(profile.Tenant),
 		Email:    strings.TrimSpace(profile.Email),
 		Device:   profile.DeviceCode,
+	}
+	if profile.Auth == "oauth_google" {
+		account.ClientSecret = strings.TrimSpace(os.Getenv(EnvGoogleClientSecret))
 	}
 	if account.ClientID == "" {
 		switch profile.Auth {
@@ -92,6 +108,16 @@ func FromProfile(profile config.Profile) (Account, error) {
 		return Account{}, errors.New("oauth: profile is missing an email")
 	}
 	return account, nil
+}
+
+// UseStoredClientSecret fills the Desktop secret from the keyring when the
+// environment did not set one. A non-empty environment value wins.
+func (a Account) UseStoredClientSecret(stored string) Account {
+	if a.Auth != "oauth_google" || strings.TrimSpace(a.ClientSecret) != "" {
+		return a
+	}
+	a.ClientSecret = strings.TrimSpace(stored)
+	return a
 }
 
 // Token is a sign-in result. Only the refresh token is stored.
@@ -274,7 +300,7 @@ func (f *Flow) callback(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	tok, err := f.conf.Exchange(ctx, code, oauth2.VerifierOption(f.verifier))
 	if err != nil {
-		http.Error(w, "token", http.StatusBadGateway)
+		writeFailed(w)
 		f.finish(tok, err)
 		return
 	}
@@ -287,11 +313,21 @@ func writeDone(w http.ResponseWriter) {
 	_, _ = io.WriteString(w, page)
 }
 
+func writeFailed(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusBadGateway)
+	const page = "<!DOCTYPE html><meta charset=\"utf-8\"><title>MailSorter</title><p>Sign-in did not finish. Close this window and read the message in MailSorter.</p><p>Вход не завершился. Закройте это окно и прочитайте сообщение в MailSorter.</p>"
+	_, _ = io.WriteString(w, page)
+}
+
 func (f *Flow) finish(tok *oauth2.Token, err error) {
 	f.once.Do(func() {
 		defer close(f.done)
 		if err != nil {
-			f.err = safeTokenError(err, "")
+			secret := ""
+			if f.conf != nil {
+				secret = f.conf.ClientSecret
+			}
+			f.err = safeTokenError(err, secret)
 			return
 		}
 		if tok == nil || tok.RefreshToken == "" {
@@ -387,7 +423,7 @@ func (s *Source) refreshLocked(ctx context.Context) (string, error) {
 		Expiry:       time.Now().Add(-time.Hour),
 	}).Token()
 	if err != nil {
-		return "", safeTokenError(err, old)
+		return "", safeTokenError(err, old, s.conf.ClientSecret)
 	}
 	if tok.AccessToken == "" {
 		return "", errors.New("oauth: the server did not return an access token")
@@ -435,10 +471,11 @@ func configFor(account Account, redirect string) (*oauth2.Config, error) {
 	}
 	endpoint.AuthStyle = oauth2.AuthStyleInParams
 	return &oauth2.Config{
-		ClientID:    account.ClientID,
-		Endpoint:    endpoint,
-		RedirectURL: redirect,
-		Scopes:      scopes,
+		ClientID:     account.ClientID,
+		ClientSecret: account.ClientSecret,
+		Endpoint:     endpoint,
+		RedirectURL:  redirect,
+		Scopes:       scopes,
 	}, nil
 }
 
@@ -470,7 +507,7 @@ func providerEndpoint(account Account) (oauth2.Endpoint, []string, error) {
 	}
 }
 
-func safeTokenError(err error, secret string) error {
+func safeTokenError(err error, hidden ...string) error {
 	if err == nil {
 		return nil
 	}
@@ -479,11 +516,16 @@ func safeTokenError(err error, secret string) error {
 		return ErrReauth
 	}
 	text := err.Error()
-	if secret != "" && strings.Contains(text, secret) {
-		return errors.New("oauth: the token request failed")
+	for _, secret := range hidden {
+		if secret != "" && strings.Contains(text, secret) {
+			return errors.New("oauth: the token request failed")
+		}
 	}
 	if strings.Contains(text, "invalid_grant") {
 		return ErrReauth
+	}
+	if errors.As(err, &retrieved) && retrieved.ErrorCode == "invalid_request" && strings.Contains(strings.ToLower(retrieved.ErrorDescription), "client_secret") && len(retrieved.ErrorDescription) <= 80 {
+		return ErrGoogleClientSecret
 	}
 	return errors.New("oauth: the token request failed")
 }

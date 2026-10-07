@@ -285,6 +285,111 @@ func TestGraphScopeStaysOffTheIMAPSignIn(t *testing.T) {
 	}
 }
 
+func TestLoopbackSendsDesktopClientSecret(t *testing.T) {
+	const secret = "desktop-secret-do-not-print"
+	var posted url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("form: %v", err)
+		}
+		posted = r.PostForm
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "access-1",
+			"refresh_token": "refresh-1",
+			"expires_in":    3600,
+			"token_type":    "Bearer",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	account := Account{
+		Auth:         "oauth_google",
+		ClientID:     "desktop-client",
+		ClientSecret: secret,
+		Email:        "ada@example.com",
+		Endpoint:     testEndpoint(srv.URL),
+		HTTP:         srv.Client(),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	flow, err := Begin(ctx, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := url.Parse(flow.AuthURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := auth.Query()
+	res, err := http.Get(q.Get("redirect_uri") + "/?code=auth-code&state=" + url.QueryEscape(q.Get("state")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if strings.Contains(string(body), secret) {
+		t.Fatal("callback page contains the client secret")
+	}
+	tok, err := flow.Wait(ctx)
+	if err != nil || tok.RefreshToken != "refresh-1" {
+		t.Fatalf("wait err=%v", err)
+	}
+	if posted.Get("client_secret") != secret || posted.Get("code_verifier") == "" {
+		t.Fatal("token form omitted the desktop client secret or the verifier")
+	}
+}
+
+func TestFromProfileReadsGoogleClientSecret(t *testing.T) {
+	const secret = "desktop-secret-do-not-print"
+	t.Setenv(EnvGoogleClientSecret, secret)
+	google, err := FromProfile(config.Profile{Auth: "oauth_google", ClientID: "desktop-client", Email: "ada@example.com"})
+	if err != nil || google.ClientSecret != secret {
+		t.Fatal("google client secret was not read from the environment")
+	}
+	microsoft, err := FromProfile(config.Profile{Auth: "oauth_microsoft", ClientID: "public-client", Email: "ada@example.com"})
+	if err != nil || microsoft.ClientSecret != "" {
+		t.Fatal("microsoft sign-in picked up the google client secret")
+	}
+}
+
+func TestStoredClientSecretDoesNotOverrideEnv(t *testing.T) {
+	const secret = "desktop-secret-do-not-print"
+	t.Setenv(EnvGoogleClientSecret, secret)
+	account, err := FromProfile(config.Profile{Auth: "oauth_google", ClientID: "desktop-client", Email: "ada@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := account.UseStoredClientSecret("other-value"); got.ClientSecret != secret {
+		t.Fatal("stored secret replaced the environment")
+	}
+	empty := Account{Auth: "oauth_google"}.UseStoredClientSecret("  stored  ")
+	if empty.ClientSecret != "stored" {
+		t.Fatal("stored secret was not applied")
+	}
+	microsoft := Account{Auth: "oauth_microsoft"}.UseStoredClientSecret("stored")
+	if microsoft.ClientSecret != "" {
+		t.Fatal("microsoft account accepted the google secret")
+	}
+}
+
+func TestMissingGoogleClientSecret(t *testing.T) {
+	err := safeTokenError(&oauth2.RetrieveError{
+		ErrorCode:        "invalid_request",
+		ErrorDescription: "client_secret is missing.",
+	})
+	if !errors.Is(err, ErrGoogleClientSecret) {
+		t.Fatal(err)
+	}
+	const secret = "desktop-secret-do-not-print"
+	echoed := safeTokenError(&oauth2.RetrieveError{
+		ErrorCode:        "invalid_request",
+		ErrorDescription: "client_secret is missing. " + secret,
+	}, secret)
+	if errors.Is(echoed, ErrGoogleClientSecret) || strings.Contains(echoed.Error(), secret) {
+		t.Fatalf("echoed %v", echoed)
+	}
+}
+
 func TestMissingClientAndRefreshDoNotDial(t *testing.T) {
 	account := Account{Auth: "oauth_google", Email: "ada@example.com", HTTP: &http.Client{Transport: failTransport{t}}}
 	_, err := Begin(context.Background(), account)

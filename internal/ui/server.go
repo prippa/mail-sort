@@ -23,6 +23,7 @@ import (
 	"github.com/prippa/mail-sort/internal/classify"
 	"github.com/prippa/mail-sort/internal/config"
 	"github.com/prippa/mail-sort/internal/i18n"
+	"github.com/prippa/mail-sort/internal/oauth"
 	"github.com/prippa/mail-sort/internal/secrets"
 	"github.com/prippa/mail-sort/internal/store"
 )
@@ -297,6 +298,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.currentRun(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/oauth/start":
 		s.startOAuth(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/oauth/client-secret":
+		s.saveGoogleClientSecret(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/oauth/status":
 		s.oauthStatus(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/classifiers/key":
@@ -441,7 +444,19 @@ func (s *Server) secretValues(cfg config.Config) []string {
 	}
 	for _, profile := range cfg.Profiles {
 		add(profile.PasswordEnv)
+		if profile.Auth != "oauth_google" {
+			continue
+		}
+		vault, err := s.secretStore()
+		if err != nil {
+			continue
+		}
+		value, err := vault.Get(secrets.GoogleClientAccount(profile.Name))
+		if err == nil && len(strings.TrimSpace(value)) >= 4 {
+			out = append(out, strings.TrimSpace(value))
+		}
 	}
+	add(oauth.EnvGoogleClientSecret)
 	for _, spec := range cfg.Classifiers {
 		name := spec.KeyEnv
 		if name == "" && spec.Provider == "jev" {

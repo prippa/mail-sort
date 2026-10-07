@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -291,6 +292,45 @@ func TestOAuthStartAndKeyStayLocal(t *testing.T) {
 	bootBody := readAll(t, boot)
 	if !strings.Contains(bootBody, `"key_set":true`) || strings.Contains(bootBody, key) {
 		t.Fatalf("bootstrap %s", bootBody)
+	}
+}
+
+func TestGoogleClientSecretStaysOutOfConfig(t *testing.T) {
+	srv := startUI(t)
+	t.Setenv(secrets.EnvMasterPassword, "test-master")
+	const secret = "desktop-client-secret-value"
+	saved := call(t, srv, http.MethodPost, "/api/profiles", `{
+		"name":"Amara","provider":"gmail","username":"ada@example.com","email":"ada@example.com",
+		"auth":"oauth_google","client_id":"desktop-client"
+	}`, true)
+	if saved.StatusCode != http.StatusOK {
+		t.Fatalf("profile %d %s", saved.StatusCode, readAll(t, saved))
+	}
+	_ = saved.Body.Close()
+	posted := call(t, srv, http.MethodPost, "/api/oauth/client-secret", `{"name":"Amara","value":"`+secret+`"}`, true)
+	body := readAll(t, posted)
+	if posted.StatusCode != http.StatusOK || strings.Contains(body, secret) || !strings.Contains(body, `"client_secret_set":true`) {
+		t.Fatalf("save %d %s", posted.StatusCode, body)
+	}
+	raw, err := os.ReadFile(srv.configPath)
+	if err != nil || strings.Contains(string(raw), secret) {
+		t.Fatalf("config leaked")
+	}
+	boot := call(t, srv, http.MethodGet, "/api/bootstrap", "", true)
+	bootBody := readAll(t, boot)
+	if !strings.Contains(bootBody, `"client_secret_set":true`) || strings.Contains(bootBody, secret) {
+		t.Fatalf("bootstrap leaked or missed the flag")
+	}
+	removed := call(t, srv, http.MethodPost, "/api/profiles/delete", `{"name":"Amara"}`, true)
+	if removed.StatusCode != http.StatusOK || strings.Contains(readAll(t, removed), secret) {
+		t.Fatalf("delete %d", removed.StatusCode)
+	}
+	vault, err := secrets.Open(srv.stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Get(secrets.GoogleClientAccount("Amara")); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatal("client secret remained after the account was removed")
 	}
 }
 

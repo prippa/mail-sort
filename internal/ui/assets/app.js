@@ -23,6 +23,8 @@ document.addEventListener('alpine:init', function () {
       evaluate: { rows: [], suggestion: { ok: false, threshold: 0, labeled: 0, wrong: 0, auto: 0 } },
       poll: 0,
       pending: '',
+      busy: 0,
+      runNote: '',
       report: { rows: [], note_key: '' },
       runForm: {
         profile: '',
@@ -245,6 +247,31 @@ document.addEventListener('alpine:init', function () {
           this.copyBoot()
           this.connection = await this.api('POST', '/api/profiles/test', { name: this.draft.name })
           this.notice = this.text('accounts.connected')
+        })
+      },
+
+      clientSecretSet: function (name) {
+        var profiles = this.boot && this.boot.profiles ? this.boot.profiles : []
+        for (var i = 0; i < profiles.length; i++) {
+          if (profiles[i].name === name) {
+            return !!profiles[i].client_secret_set
+          }
+        }
+        return false
+      },
+
+      saveClientSecret: async function (name, value) {
+        var self = this
+        await this.guard(async function () {
+          if (self.screen === 'wizard') {
+            self.boot = await self.api('POST', '/api/profiles', self.profilePayload())
+            self.copyBoot()
+            name = self.draft.name
+          }
+          await self.api('POST', '/api/oauth/client-secret', { name: name, value: value || '' })
+          self.draft.client_secret = ''
+          self.notice = self.text('accounts.client_secret_saved')
+          await self.load()
         })
       },
 
@@ -501,14 +528,15 @@ document.addEventListener('alpine:init', function () {
           if (!this.runForm.profile) {
             return
           }
-          this.report = await this.api('GET', '/api/run?profile=' + encodeURIComponent(this.runForm.profile))
+          this.showRun(await this.api('GET', '/api/run?profile=' + encodeURIComponent(this.runForm.profile)))
         })
       },
 
       plan: async function () {
         this.pending = 'plan'
+        this.runNote = ''
         await this.guard(async function () {
-          this.report = await this.api('POST', '/api/plan', {
+          this.showRun(await this.api('POST', '/api/plan', {
             profile: this.runForm.profile,
             folder: this.runForm.folder,
             limit: Number(this.runForm.limit) || 200,
@@ -516,45 +544,123 @@ document.addEventListener('alpine:init', function () {
             since: this.runForm.since,
             include_flagged: !!this.runForm.include_flagged,
             include_drafts: !!this.runForm.include_drafts
-          })
-          this.notice = this.text(this.report.note_key)
+          }))
         })
       },
 
       confirmRun: async function () {
+        this.pending = 'confirm'
+        this.runNote = ''
         await this.guard(async function () {
           var data = await this.api('POST', '/api/confirm', { profile: this.runForm.profile })
-          this.notice = this.text(data.note_key)
+          this.runNote = this.text(data.note_key)
           await this.load()
         })
       },
 
       applyRun: async function () {
+        this.pending = 'apply'
+        this.runNote = ''
         await this.guard(async function () {
-          this.report = await this.api('POST', '/api/apply', {
+          this.showRun(await this.api('POST', '/api/apply', {
             profile: this.runForm.profile,
             copy_only: !!this.runForm.copy_only
-          })
-          this.notice = this.text(this.report.note_key)
+          }))
         })
       },
 
       undoRun: async function () {
+        this.pending = 'undo'
+        this.runNote = ''
         await this.guard(async function () {
-          this.report = await this.api('POST', '/api/undo', { profile: this.runForm.profile })
-          this.notice = this.text(this.report.note_key)
+          this.showRun(await this.api('POST', '/api/undo', { profile: this.runForm.profile }))
         })
       },
 
       overrideRow: async function () {
+        this.pending = 'override'
+        this.runNote = ''
         await this.guard(async function () {
-          this.report = await this.api('POST', '/api/override', {
+          this.showRun(await this.api('POST', '/api/override', {
             profile: this.runForm.profile,
             uid: Number(this.overrideUID) || 0,
             category: this.overrideCategory
-          })
-          this.notice = this.text('run.override')
+          }))
+          this.runNote = this.text('run.override')
         })
+      },
+
+      showRun: function (data) {
+        this.report = data || { rows: [], note_key: '' }
+        var key = this.report.note_key || ''
+        if (!key || key === 'run.empty') {
+          this.runNote = ''
+          return
+        }
+        var note = this.text(key)
+        var rows = this.report.rows || []
+        if (rows.length) {
+          note = note + ' ' + this.text('run.count').replace('{n}', String(rows.length))
+        }
+        this.runNote = note
+      },
+
+      runBusyText: function () {
+        if (this.pending === 'plan') {
+          return this.text('run.working_plan').replace('{n}', String(Number(this.runForm.limit) || 200))
+        }
+        if (this.pending === 'confirm') {
+          return this.text('run.working_confirm')
+        }
+        if (this.pending === 'apply') {
+          return this.text('run.working_apply')
+        }
+        if (this.pending === 'undo') {
+          return this.text('run.working_undo')
+        }
+        return this.text('run.working_override')
+      },
+
+      profileConfirmed: function () {
+        var profiles = this.boot && this.boot.profiles ? this.boot.profiles : []
+        for (var i = 0; i < profiles.length; i++) {
+          if (profiles[i].name === this.runForm.profile) {
+            return !!profiles[i].confirmed
+          }
+        }
+        return false
+      },
+
+      runStatus: function () {
+        return this.report && this.report.run && this.report.run.status ? this.report.run.status : ''
+      },
+
+      nextRun: function () {
+        var status = this.runStatus()
+        if (!status || status === 'superseded' || status === 'undone' || status === 'applied') {
+          return 'plan'
+        }
+        if (!this.profileConfirmed()) {
+          return 'confirm'
+        }
+        if (status === 'dry' || status === 'partial') {
+          return 'apply'
+        }
+        return 'plan'
+      },
+
+      canConfirm: function () {
+        return !!(this.report && this.report.run && this.report.run.id) && !this.profileConfirmed()
+      },
+
+      canApply: function () {
+        var status = this.runStatus()
+        return this.profileConfirmed() && (status === 'dry' || status === 'partial')
+      },
+
+      canUndo: function () {
+        var status = this.runStatus()
+        return status === 'applied' || status === 'partial'
       },
 
       openActivity: async function () {
@@ -613,6 +719,7 @@ document.addEventListener('alpine:init', function () {
 
       guard: async function (fn) {
         this.error = ''
+        this.busy += 1
         try {
           await fn.call(this)
         } catch (err) {
@@ -623,6 +730,11 @@ document.addEventListener('alpine:init', function () {
             return
           }
           this.error = err.message
+        } finally {
+          this.busy = Math.max(0, this.busy - 1)
+          if (!this.busy) {
+            this.pending = ''
+          }
         }
       },
 
@@ -758,6 +870,7 @@ function blankDraft() {
     discover: false,
     max_chars: '',
     client_id: '',
+    client_secret: '',
     tenant: 'common',
     device_code: false,
     use_password: false,

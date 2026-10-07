@@ -70,6 +70,14 @@ func (s *Server) labelExample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := strings.TrimSpace(body.Profile)
+	if profile == "" {
+		s.fail(w, http.StatusBadRequest, "config: profile name is empty")
+		return
+	}
+	if body.UID == 0 {
+		s.fail(w, http.StatusBadRequest, "engine: that message is not in the dry run")
+		return
+	}
 	cfg, err := s.loadConfig(r.Context())
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, s.publicError(cfg, err))
